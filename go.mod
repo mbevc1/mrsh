@@ -1,8 +1,6 @@
 module github.com/mbevc1/mrsh
 
-go 1.22.7
-
-toolchain go1.24.7
+go 1.25
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.33.0

@@ -60,6 +60,23 @@ targeted by group or individual name. Secrets may be stored as environment
 variable references (env:VAR), AWS SSM parameters, or AWS Secrets Manager
 secrets, and optionally encrypted at rest with SOPS.`,
 	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		v, _ := cmd.Flags().GetBool("version")
+		if v {
+			fmt.Printf("%s version %s\n", Name, Version)
+			if Commit != "" {
+				fmt.Printf("  commit:   %s\n", Commit)
+			}
+			if Date != "" {
+				fmt.Printf("  date:     %s\n", Date)
+			}
+			if BuiltBy != "" {
+				fmt.Printf("  built by: %s\n", BuiltBy)
+			}
+			return nil
+		}
+		return cmd.Help()
+	},
 }
 
 // Execute wires version info then runs the cobra command tree.
@@ -74,6 +91,8 @@ func Execute(v, c, d, b string) {
 }
 
 func init() {
+	rootCmd.Flags().BoolP("version", "v", false, "Print version information and exit")
+
 	f := rootCmd.PersistentFlags()
 	f.StringVarP(&cfgFile, "config", "f", "hosts.yaml", "Config file path")
 	f.StringVarP(&groupFlag, "group", "g", "", "Filter hosts by group")

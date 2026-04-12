@@ -345,3 +345,40 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// RawConfig holds the loosely-typed YAML structure used for in-place mutation
+// (add/update/remove hosts) without triggering secret resolution.
+type RawConfig struct {
+	Defaults map[string]interface{}   `yaml:"defaults,omitempty"`
+	Commands []string                 `yaml:"commands,omitempty"`
+	Hosts    []map[string]interface{} `yaml:"hosts"`
+}
+
+// ReadRaw reads the config file without secret resolution into a
+// loosely-typed structure suitable for in-place modification.
+func ReadRaw(path string) (*RawConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RawConfig{}, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var rc RawConfig
+	if err := yaml.Unmarshal(data, &rc); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return &rc, nil
+}
+
+// Write marshals rc and writes it to path.
+func (rc *RawConfig) Write(path string) error {
+	data, err := yaml.Marshal(rc)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}

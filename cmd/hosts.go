@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/mbevc1/mrsh/pkg/config"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var hostsCmd = &cobra.Command{
@@ -71,40 +71,23 @@ func runHostsInit(cmd *cobra.Command, args []string) error {
 
 	useSops := promptBool(r, "Enable SOPS encryption for sensitive fields?", false)
 
-	type defaultsYAML struct {
-		User    string `yaml:"user"`
-		Port    int    `yaml:"port"`
-		KeyFile string `yaml:"identity_file,omitempty"`
-		Timeout int    `yaml:"timeout"`
-	}
-	type hostsFileYAML struct {
-		Defaults defaultsYAML `yaml:"defaults"`
-		Hosts    []interface{} `yaml:"hosts"`
-	}
-
-	out := hostsFileYAML{
-		Defaults: defaultsYAML{
-			User:    defaultUser,
-			Port:    defaultPort,
-			KeyFile: defaultKeyFile,
-			Timeout: 30,
+	rc := &config.RawConfig{
+		Defaults: map[string]interface{}{
+			"user":          defaultUser,
+			"port":          defaultPort,
+			"identity_file": defaultKeyFile,
+			"timeout":       30,
 		},
-		Hosts: []interface{}{
-			map[string]interface{}{
+		Hosts: []map[string]interface{}{
+			{
 				"name":  "example",
 				"host":  "192.168.1.1",
 				"group": "default",
 			},
 		},
 	}
-
-	data, err := yaml.Marshal(out)
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
+	if err := rc.Write(configPath); err != nil {
+		return err
 	}
 	fmt.Printf("Created %s\n", configPath)
 
@@ -187,7 +170,7 @@ func runHostsAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--address is required")
 	}
 
-	raw, err := readRawConfig(cfgFile)
+	raw, err := config.ReadRaw(cfgFile)
 	if err != nil {
 		return err
 	}
@@ -220,7 +203,11 @@ func runHostsAdd(cmd *cobra.Command, args []string) error {
 	}
 	raw.Hosts = append(raw.Hosts, entry)
 
-	return writeRawConfig(cfgFile, raw)
+	if err := raw.Write(cfgFile); err != nil {
+		return err
+	}
+	fmt.Printf("Updated %s\n", cfgFile)
+	return nil
 }
 
 // ---- hosts update ----
@@ -236,7 +223,7 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--name is required")
 	}
 
-	raw, err := readRawConfig(cfgFile)
+	raw, err := config.ReadRaw(cfgFile)
 	if err != nil {
 		return err
 	}
@@ -270,7 +257,11 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("host %q not found", addName)
 	}
 
-	return writeRawConfig(cfgFile, raw)
+	if err := raw.Write(cfgFile); err != nil {
+		return err
+	}
+	fmt.Printf("Updated %s\n", cfgFile)
+	return nil
 }
 
 // ---- hosts remove ----
@@ -284,7 +275,7 @@ var hostsRemoveCmd = &cobra.Command{
 }
 
 func runHostsRemove(cmd *cobra.Command, args []string) error {
-	raw, err := readRawConfig(cfgFile)
+	raw, err := config.ReadRaw(cfgFile)
 	if err != nil {
 		return err
 	}
@@ -308,7 +299,7 @@ func runHostsRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	raw.Hosts = append(raw.Hosts[:idx], raw.Hosts[idx+1:]...)
-	if err := writeRawConfig(cfgFile, raw); err != nil {
+	if err := raw.Write(cfgFile); err != nil {
 		return err
 	}
 	fmt.Printf("Removed host %q from %s\n", removeName, cfgFile)
@@ -316,42 +307,6 @@ func runHostsRemove(cmd *cobra.Command, args []string) error {
 }
 
 // ---- helpers ----
-
-// rawConfig holds the loosely-typed YAML structure used for mutation operations.
-type rawConfig struct {
-	Defaults map[string]interface{}   `yaml:"defaults,omitempty"`
-	Commands []string                  `yaml:"commands,omitempty"`
-	Hosts    []map[string]interface{} `yaml:"hosts"`
-}
-
-// readRawConfig reads the config file without secret resolution into a
-// loosely-typed structure suitable for in-place modification.
-func readRawConfig(path string) (*rawConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &rawConfig{}, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	var rc rawConfig
-	if err := yaml.Unmarshal(data, &rc); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	return &rc, nil
-}
-
-func writeRawConfig(path string, rc *rawConfig) error {
-	data, err := yaml.Marshal(rc)
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	fmt.Printf("Updated %s\n", path)
-	return nil
-}
 
 // prompt prints a prompt with a default value and reads a line from r.
 func prompt(r *bufio.Reader, question, defaultVal string) string {

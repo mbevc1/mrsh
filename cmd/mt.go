@@ -126,7 +126,7 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 		defer c.Close()
 
 		start := time.Now()
-		rbOut, _, _, err := c.RunWithPTY(":put [/system routerboard get as-value]")
+		resOut, _, _, err := c.RunWithPTY("/system resource print")
 		r.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			r.ExitCode = 1
@@ -135,7 +135,7 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 		}
 
 		pkgOut, _, _, _ := c.RunWithPTY("/system package print")
-		r.Stdout = rbOut + "\n---\n" + pkgOut
+		r.Stdout = resOut + "\n---\n" + pkgOut
 		return r
 	})
 
@@ -154,17 +154,14 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 }
 
 func parseROSVersion(output string) string {
+	// /system resource print output: "                  version: 7.14.3 (stable)"
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.Contains(line, "version:") {
+		if strings.HasPrefix(line, "version:") {
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
 				return strings.TrimSpace(parts[1])
 			}
-		}
-		// RouterOS ":put" output format: key=value
-		if strings.HasPrefix(line, "version=") {
-			return strings.TrimPrefix(line, "version=")
 		}
 	}
 	return "unknown"

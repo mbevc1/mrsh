@@ -1,0 +1,42 @@
+defaults:
+  user: admin
+  port: 22
+  identity_file: ~/.ssh/id_rsa
+  timeout: 30
+
+# Optional: default commands run when no -c flag is given
+# commands:
+#   - uptime
+
+hosts:
+  - name: web01
+    host: 10.0.0.1
+    group: web
+    user: deploy
+    # Plain password (not recommended for production):
+    # pass: mysecret
+    # Environment variable reference:
+    pass: env:WEB01_PASS
+    identity_file: ~/.ssh/web_key
+
+  - name: web02
+    host: 10.0.0.2
+    group: web
+    user: deploy
+    # SOPS-encrypted value (set via: sops -e -i hosts.yaml):
+    # pass: ENC[AES256_GCM,data:xK3p...,type:str]
+
+  - name: db01
+    host: 10.0.0.10
+    group: db
+    port: 2222
+    # AWS Secrets Manager (with #field JSON key extraction):
+    user: arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#user
+    pass: arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#pass
+
+  - name: router01
+    host: 192.168.1.1
+    group: routers
+    user: admin
+    # AWS SSM Parameter Store:
+    pass: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/router01/pass

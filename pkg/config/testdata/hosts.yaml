@@ -1,0 +1,17 @@
+defaults:
+  user: testuser
+  port: 22
+  identity_file: ~/.ssh/id_rsa
+  timeout: 10
+
+hosts:
+  - name: host1
+    host: 10.0.0.1
+    group: web
+    user: deploy
+
+  - name: host2
+    host: 10.0.0.2
+    group: db
+    pass: env:TEST_PASS_HOST2
+    port: 2222

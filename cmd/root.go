@@ -21,6 +21,7 @@ import (
 var (
 	cfgFile   string
 	groupFlag string
+	nameFlag  string
 	hostFlag  string
 	hostsFlag string
 	parallel  int
@@ -97,7 +98,8 @@ func init() {
 	f := rootCmd.PersistentFlags()
 	f.StringVarP(&cfgFile, "config", "f", "hosts.yaml", "Config file path")
 	f.StringVarP(&groupFlag, "group", "g", "", "Filter hosts by group")
-	f.StringVar(&hostFlag, "host", "", "Filter by host name or address")
+	f.StringVarP(&nameFlag, "name", "n", "", "Filter hosts by name")
+	f.StringVar(&hostFlag, "host", "", "Filter by host address")
 	f.StringVar(&hostsFlag, "hosts", "", "Ad-hoc comma-separated hosts (user@host:port)")
 	f.IntVarP(&parallel, "parallel", "p", 1, "Number of parallel SSH sessions")
 	f.IntVarP(&timeout, "timeout", "t", 30, "SSH timeout in seconds")
@@ -138,7 +140,17 @@ func filteredHosts() []config.Host {
 			adhoc[i] = strings.TrimSpace(adhoc[i])
 		}
 	}
-	return config.FilterHosts(cfg, groupFlag, hostFlag, adhoc)
+	hosts := config.FilterHosts(cfg, groupFlag, hostFlag, adhoc)
+	if nameFlag != "" {
+		filtered := hosts[:0]
+		for _, h := range hosts {
+			if h.Name == nameFlag {
+				filtered = append(filtered, h)
+			}
+		}
+		hosts = filtered
+	}
+	return hosts
 }
 
 // sshTimeout returns the connection timeout as a time.Duration.

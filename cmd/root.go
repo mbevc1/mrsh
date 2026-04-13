@@ -103,7 +103,7 @@ func init() {
 	f.StringVar(&hostsFlag, "hosts", "", "Ad-hoc comma-separated hosts (user@host:port)")
 	f.IntVarP(&parallel, "parallel", "p", 1, "Number of parallel SSH sessions")
 	f.IntVarP(&timeout, "timeout", "t", 30, "SSH timeout in seconds")
-	f.StringVar(&outputFmt, "output", "text", "Output format: text|json|csv")
+	f.StringVarP(&outputFmt, "output", "o", "text", "Output format: text|json|csv")
 	f.BoolVar(&dryRun, "dry-run", false, "Print what would run without executing")
 }
 

@@ -221,7 +221,7 @@ func printText(results []Result) {
 		if output == "" {
 			continue
 		}
-		fmt.Printf("\n%s\n%s\n", colorHost.Sprintf("[%s]", r.Host), output)
+		fmt.Printf("\n[%s]\n%s\n", colorHost.Sprint(r.Host), output)
 	}
 }
 

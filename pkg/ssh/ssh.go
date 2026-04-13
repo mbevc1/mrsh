@@ -135,8 +135,8 @@ func (c *Client) Run(cmd string) (stdout, stderr string, exitCode int, err error
 
 	runErr := session.Run(cmd)
 
-	stdout = string(bytes.TrimRight(stdoutBuf.Bytes(), "\r\n"))
-	stderr = string(bytes.TrimRight(stderrBuf.Bytes(), "\r\n"))
+	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))
+	stderr = string(bytes.Trim(stderrBuf.Bytes(), "\r\n"))
 
 	if runErr != nil {
 		if exitErr, ok := runErr.(*ssh.ExitError); ok {
@@ -211,8 +211,8 @@ func (c *Client) UploadScript(script []byte) (stdout, stderr string, exitCode in
 
 	runErr := session.Run("bash -s")
 
-	stdout = string(bytes.TrimRight(stdoutBuf.Bytes(), "\r\n"))
-	stderr = string(bytes.TrimRight(stderrBuf.Bytes(), "\r\n"))
+	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))
+	stderr = string(bytes.Trim(stderrBuf.Bytes(), "\r\n"))
 
 	if runErr != nil {
 		if exitErr, ok := runErr.(*ssh.ExitError); ok {

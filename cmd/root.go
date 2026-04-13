@@ -200,8 +200,17 @@ func printText(results []Result) {
 		if r.ExitCode != 0 && r.Stderr != "" {
 			output = "[stderr] " + r.Stderr
 		}
-		// Collapse multi-line output to single line for table display.
-		output = strings.ReplaceAll(output, "\n", " | ")
+		// Collapse multi-line output to a single line for table display,
+		// skipping blank lines produced by some devices (e.g. RouterOS).
+		if strings.ContainsRune(output, '\n') {
+			var parts []string
+			for _, l := range strings.Split(output, "\n") {
+				if s := strings.TrimSpace(l); s != "" {
+					parts = append(parts, s)
+				}
+			}
+			output = strings.Join(parts, " | ")
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%dms\t%s\n",
 			r.Host, r.Name, r.Group, r.ExitCode, r.DurationMs, output)
 	}

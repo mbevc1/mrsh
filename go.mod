@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.1
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.34.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.56.3
+	github.com/fatih/color v1.18.0
 	github.com/getsops/sops/v3 v3.9.4
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/spf13/cobra v1.9.1
@@ -64,7 +65,6 @@ require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.6 // indirect
 	github.com/envoyproxy/go-control-plane v0.13.1 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.1.0 // indirect
-	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e // indirect
 	github.com/go-jose/go-jose/v4 v4.0.4 // indirect

@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/mbevc1/mrsh/pkg/config"
 	"github.com/spf13/cobra"
 )
@@ -192,12 +193,23 @@ func printResults(results []Result, format string) {
 	}
 }
 
+var (
+	colorHeader  = color.New(color.Bold)
+	colorHost    = color.New(color.FgCyan, color.Bold)
+	colorOK      = color.New(color.FgGreen)
+	colorFail    = color.New(color.FgRed)
+)
+
 func printText(results []Result) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tNAME\tGROUP\tEXIT\tDURATION")
+	fmt.Fprintln(w, colorHeader.Sprint("HOST\tNAME\tGROUP\tEXIT\tDURATION"))
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%dms\n",
-			r.Host, r.Name, r.Group, r.ExitCode, r.DurationMs)
+		exit := colorOK.Sprintf("%d", r.ExitCode)
+		if r.ExitCode != 0 {
+			exit = colorFail.Sprintf("%d", r.ExitCode)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dms\n",
+			r.Host, r.Name, r.Group, exit, r.DurationMs)
 	}
 	w.Flush()
 
@@ -209,7 +221,7 @@ func printText(results []Result) {
 		if output == "" {
 			continue
 		}
-		fmt.Printf("\n[%s]\n%s\n", r.Host, output)
+		fmt.Printf("\n%s\n%s\n", colorHost.Sprintf("[%s]", r.Host), output)
 	}
 }
 

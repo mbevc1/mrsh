@@ -122,11 +122,20 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 
 	results := runParallel(hosts, parallel, func(h config.Host) Result {
 		r := Result{Host: h.Address, Name: h.Name, Group: h.Group}
-		c := mtClient(h)
+		// Read-only print commands don't need a PTY; using one causes
+		// RouterOS to keep the channel open indefinitely.
+		c := &mrshshsh.Client{
+			Host:    h.Address,
+			User:    h.User,
+			Pass:    h.Pass,
+			KeyFile: h.KeyFile,
+			Port:    h.Port,
+			Timeout: sshTimeout(),
+		}
 		defer c.Close()
 
 		start := time.Now()
-		rbOut, _, _, err := c.RunWithPTY(":put [/system routerboard get as-value]")
+		resOut, _, _, err := c.Run("/system resource print")
 		r.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			r.ExitCode = 1
@@ -134,8 +143,8 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 			return r
 		}
 
-		pkgOut, _, _, _ := c.RunWithPTY("/system package print")
-		r.Stdout = rbOut + "\n---\n" + pkgOut
+		pkgOut, _, _, _ := c.Run("/system package print")
+		r.Stdout = resOut + "\n---\n" + pkgOut
 		return r
 	})
 

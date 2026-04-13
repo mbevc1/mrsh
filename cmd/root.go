@@ -194,48 +194,23 @@ func printResults(results []Result, format string) {
 
 func printText(results []Result) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tNAME\tGROUP\tEXIT\tDURATION\tOUTPUT")
+	fmt.Fprintln(w, "HOST\tNAME\tGROUP\tEXIT\tDURATION")
+	for _, r := range results {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%dms\n",
+			r.Host, r.Name, r.Group, r.ExitCode, r.DurationMs)
+	}
+	w.Flush()
+
 	for _, r := range results {
 		output := r.Stdout
 		if r.ExitCode != 0 && r.Stderr != "" {
-			output = "[stderr] " + r.Stderr
+			output = r.Stderr
 		}
-		// Collapse multi-line output to a single line for table display,
-		// skipping blank lines and table-header lines emitted by RouterOS
-		// print commands (e.g. "Columns: NAME, VERSION" and "# NAME VERSION").
-		if strings.ContainsRune(output, '\n') {
-			var parts []string
-			for _, l := range strings.Split(output, "\n") {
-				s := strings.TrimSpace(l)
-				if s == "" || isTableHeader(s) {
-					continue
-				}
-				parts = append(parts, s)
-			}
-			output = strings.Join(parts, " | ")
+		if output == "" {
+			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%dms\t%s\n",
-			r.Host, r.Name, r.Group, r.ExitCode, r.DurationMs, output)
+		fmt.Printf("\n[%s]\n%s\n", r.Host, output)
 	}
-	w.Flush()
-}
-
-// isTableHeader reports whether a line is a table metadata row that should be
-// suppressed in single-line output. Matches:
-//   - RouterOS "Columns: NAME, VERSION, ..." descriptor lines
-//   - RouterOS column-header rows that start with "#" followed by an uppercase word
-func isTableHeader(s string) bool {
-	if strings.HasPrefix(s, "Columns:") {
-		return true
-	}
-	// "# NAME  VERSION  BUILD-TIME  SIZE"
-	if strings.HasPrefix(s, "#") {
-		rest := strings.TrimSpace(strings.TrimPrefix(s, "#"))
-		if len(rest) > 0 && rest[0] >= 'A' && rest[0] <= 'Z' {
-			return true
-		}
-	}
-	return false
 }
 
 func printJSON(results []Result) {

@@ -187,22 +187,30 @@ func parsePackageList(output string) string {
 			inPkgSection = true
 			continue
 		}
-		if inPkgSection {
-			line = strings.TrimSpace(line)
-			// Package lines typically start with a number or contain "name="
-			if strings.Contains(line, "name=") {
-				for _, part := range strings.Fields(line) {
-					if strings.HasPrefix(part, "name=") {
-						packages = append(packages, strings.TrimPrefix(part, "name="))
-					}
-				}
-			}
+		if !inPkgSection {
+			continue
+		}
+		// /system package print rows: " 0 routeros  7.22.1  ..."
+		// First field is a numeric index, second is the package name.
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && isNumeric(fields[0]) {
+			packages = append(packages, fields[1])
 		}
 	}
 	if len(packages) == 0 {
 		return "n/a"
 	}
 	return strings.Join(packages, ", ")
+}
+
+// isNumeric reports whether s consists entirely of decimal digits.
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // ---- mt reboot ----

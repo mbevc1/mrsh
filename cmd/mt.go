@@ -26,9 +26,10 @@ All mt subcommands use PTY mode automatically, as required by RouterOS SSH.`,
 // ---- mt version ----
 
 var mtVersionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Show RouterOS firmware and package versions",
-	RunE:  runMTVersion,
+	Use:     "version",
+	Aliases: []string{"ve", "v"},
+	Short:   "Show RouterOS firmware and package versions",
+	RunE:    runMTVersion,
 }
 
 // ---- mt reboot ----
@@ -38,9 +39,10 @@ var (
 )
 
 var mtRebootCmd = &cobra.Command{
-	Use:   "reboot",
-	Short: "Reboot MikroTik device(s)",
-	RunE:  runMTReboot,
+	Use:     "reboot",
+	Aliases: []string{"re", "r"},
+	Short:   "Reboot MikroTik device(s)",
+	RunE:    runMTReboot,
 }
 
 // ---- mt upgrade ----
@@ -50,9 +52,10 @@ var (
 )
 
 var mtUpgradeCmd = &cobra.Command{
-	Use:   "upgrade",
-	Short: "Check for and install RouterOS package updates",
-	RunE:  runMTUpgrade,
+	Use:     "upgrade",
+	Aliases: []string{"up", "u"},
+	Short:   "Check for and install RouterOS package updates",
+	RunE:    runMTUpgrade,
 }
 
 // ---- mt backup ----
@@ -63,9 +66,10 @@ var (
 )
 
 var mtBackupCmd = &cobra.Command{
-	Use:   "backup",
-	Short: "Export and download RouterOS configuration backup",
-	RunE:  runMTBackup,
+	Use:     "backup",
+	Aliases: []string{"ba", "b"},
+	Short:   "Export and download RouterOS configuration backup",
+	RunE:    runMTBackup,
 }
 
 func init() {

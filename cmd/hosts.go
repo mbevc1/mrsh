@@ -20,9 +20,10 @@ var hostsCmd = &cobra.Command{
 // ---- hosts init ----
 
 var hostsInitCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Create a new hosts.yaml config file interactively",
-	RunE:  runHostsInit,
+	Use:     "init",
+	Aliases: []string{"i"},
+	Short:   "Create a new hosts.yaml config file interactively",
+	RunE:    runHostsInit,
 }
 
 func init() {
@@ -115,9 +116,10 @@ func runHostsInit(cmd *cobra.Command, args []string) error {
 var showSecrets bool
 
 var hostsListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all hosts in the config",
-	RunE:  runHostsList,
+	Use:     "list",
+	Aliases: []string{"ls", "l"},
+	Short:   "List all hosts in the config",
+	RunE:    runHostsList,
 }
 
 func runHostsList(cmd *cobra.Command, args []string) error {
@@ -156,9 +158,10 @@ var (
 )
 
 var hostsAddCmd = &cobra.Command{
-	Use:   "add",
-	Short: "Add a new host entry to the config",
-	RunE:  runHostsAdd,
+	Use:     "add",
+	Aliases: []string{"a"},
+	Short:   "Add a new host entry to the config",
+	RunE:    runHostsAdd,
 }
 
 func runHostsAdd(cmd *cobra.Command, args []string) error {
@@ -213,9 +216,10 @@ func runHostsAdd(cmd *cobra.Command, args []string) error {
 // ---- hosts update ----
 
 var hostsUpdateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Update an existing host entry in the config",
-	RunE:  runHostsUpdate,
+	Use:     "update",
+	Aliases: []string{"up", "u"},
+	Short:   "Update an existing host entry in the config",
+	RunE:    runHostsUpdate,
 }
 
 func runHostsUpdate(cmd *cobra.Command, args []string) error {
@@ -269,9 +273,10 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 var removeName string
 
 var hostsRemoveCmd = &cobra.Command{
-	Use:   "remove",
-	Short: "Remove a host entry from the config",
-	RunE:  runHostsRemove,
+	Use:     "remove",
+	Aliases: []string{"rm", "r"},
+	Short:   "Remove a host entry from the config",
+	RunE:    runHostsRemove,
 }
 
 func runHostsRemove(cmd *cobra.Command, args []string) error {

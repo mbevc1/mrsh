@@ -201,13 +201,16 @@ func printText(results []Result) {
 			output = "[stderr] " + r.Stderr
 		}
 		// Collapse multi-line output to a single line for table display,
-		// skipping blank lines produced by some devices (e.g. RouterOS).
+		// skipping blank lines and table-header lines emitted by RouterOS
+		// print commands (e.g. "Columns: NAME, VERSION" and "# NAME VERSION").
 		if strings.ContainsRune(output, '\n') {
 			var parts []string
 			for _, l := range strings.Split(output, "\n") {
-				if s := strings.TrimSpace(l); s != "" {
-					parts = append(parts, s)
+				s := strings.TrimSpace(l)
+				if s == "" || isTableHeader(s) {
+					continue
 				}
+				parts = append(parts, s)
 			}
 			output = strings.Join(parts, " | ")
 		}
@@ -215,6 +218,24 @@ func printText(results []Result) {
 			r.Host, r.Name, r.Group, r.ExitCode, r.DurationMs, output)
 	}
 	w.Flush()
+}
+
+// isTableHeader reports whether a line is a table metadata row that should be
+// suppressed in single-line output. Matches:
+//   - RouterOS "Columns: NAME, VERSION, ..." descriptor lines
+//   - RouterOS column-header rows that start with "#" followed by an uppercase word
+func isTableHeader(s string) bool {
+	if strings.HasPrefix(s, "Columns:") {
+		return true
+	}
+	// "# NAME  VERSION  BUILD-TIME  SIZE"
+	if strings.HasPrefix(s, "#") {
+		rest := strings.TrimSpace(strings.TrimPrefix(s, "#"))
+		if len(rest) > 0 && rest[0] >= 'A' && rest[0] <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 func printJSON(results []Result) {

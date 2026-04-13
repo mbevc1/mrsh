@@ -80,7 +80,7 @@ func (c *Client) connect() error {
 	if port == 0 {
 		port = 22
 	}
-	addr := fmt.Sprintf("%s:%d", c.Host, port)
+	addr := net.JoinHostPort(c.Host, fmt.Sprintf("%d", port))
 
 	// Dial with explicit timeout at the TCP level.
 	timeout := c.Timeout

@@ -238,25 +238,30 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		stdoutBuf bytes.Buffer
 		stderrBuf bytes.Buffer
 	)
-	go c.captureTo(stdoutPipe, &stdoutBuf, &bufMu, "stdout")
-	go c.captureTo(stderrPipe, &stderrBuf, &bufMu, "stderr")
+	// notifyCh is signalled by captureTo every time new bytes arrive so we
+	// react immediately instead of sleeping through a fixed poll interval.
+	notifyCh := make(chan struct{}, 32)
+	go c.captureTo(stdoutPipe, &stdoutBuf, &bufMu, "stdout", notifyCh)
+	go c.captureTo(stderrPipe, &stderrBuf, &bufMu, "stderr", nil)
 
 	if err = session.Start(cmd); err != nil {
 		err = fmt.Errorf("start: %w", err)
 		return
 	}
 
-	// Poll for any prompt pattern, up to 30 s. Log new bytes as they arrive
-	// so --debug reveals exactly what the remote side is sending.
-	//
-	// RouterOS probes the terminal before showing a confirmation prompt:
-	//   \x1bZ    (DECID) — identify yourself
-	//   \x1b[6n  (DSR)   — where is the cursor? (used to detect screen size)
-	// Without responses RouterOS waits forever, so we answer them in-band.
-	deadline := time.Now().Add(30 * time.Second)
-	prompted := false
+	// React to data as soon as it arrives. RouterOS probes the terminal
+	// (DECID, DSR) before showing a confirmation prompt; reply in-band.
+	timeoutCh := time.After(30 * time.Second)
 	lastLen := 0
-	for time.Now().Before(deadline) {
+outer:
+	for {
+		select {
+		case <-timeoutCh:
+			c.debugf("%s timed out waiting for prompt (stdout=%d bytes), sending input anyway", c.Host, lastLen)
+			break outer
+		case <-notifyCh:
+		}
+
 		bufMu.Lock()
 		out := stdoutBuf.String()
 		bufMu.Unlock()
@@ -266,8 +271,6 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
 			lastLen = len(out)
 
-			// RouterOS probes the terminal on each render cycle. Reply to every
-			// occurrence in new bytes so it doesn't stall between rounds.
 			if strings.Contains(newBytes, "\x1bZ") {
 				c.debugf("%s responding to DECID as VT100", c.Host)
 				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
@@ -281,20 +284,10 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		for _, p := range prompts {
 			if strings.Contains(out, p) {
 				c.debugf("%s prompt matched: %q", c.Host, p)
-				prompted = true
-				break
+				break outer
 			}
 		}
-		if prompted {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
 	}
-
-	if !prompted {
-		c.debugf("%s no prompt matched (stdout=%d bytes), sending input anyway", c.Host, lastLen)
-	}
-
 	// Send the response. Errors here are benign — the device may already be
 	// tearing the connection down (e.g. immediately after /system reboot).
 	if _, werr := stdinPipe.Write(input); werr != nil {
@@ -325,9 +318,9 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 	return
 }
 
-// captureTo reads chunks from r into buf. When the client has a Debug function,
-// each chunk is logged so that interactive sessions can be diagnosed.
-func (c *Client) captureTo(r interface{ Read([]byte) (int, error) }, buf *bytes.Buffer, mu *sync.Mutex, label string) {
+// captureTo reads chunks from r into buf, signalling notify (if non-nil) on
+// each write so that callers can react to data without sleeping.
+func (c *Client) captureTo(r interface{ Read([]byte) (int, error) }, buf *bytes.Buffer, mu *sync.Mutex, label string, notify chan<- struct{}) {
 	chunk := make([]byte, 4096)
 	for {
 		n, readErr := r.Read(chunk)
@@ -336,6 +329,12 @@ func (c *Client) captureTo(r interface{ Read([]byte) (int, error) }, buf *bytes.
 			buf.Write(chunk[:n])
 			mu.Unlock()
 			c.debugf("  [%s +%d]: %q", label, n, chunk[:n])
+			if notify != nil {
+				select {
+				case notify <- struct{}{}:
+				default:
+				}
+			}
 		}
 		if readErr != nil {
 			return

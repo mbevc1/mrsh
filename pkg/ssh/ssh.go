@@ -181,6 +181,55 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
+// RunWithInput executes cmd with the given bytes piped to stdin. Useful for
+// commands that prompt for confirmation (e.g. RouterOS "/system reboot" which
+// asks "Reboot, yes? [y/N]:"). Honours c.RequestPTY.
+func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, exitCode int, err error) {
+	if err = c.connect(); err != nil {
+		return
+	}
+	c.debugf("%s exec with input (%d byte(s), pty=%t): %s", c.Host, len(input), c.RequestPTY, cmd)
+
+	session, err := c.client.NewSession()
+	if err != nil {
+		err = fmt.Errorf("new session: %w", err)
+		return
+	}
+	defer session.Close()
+
+	if c.RequestPTY {
+		modes := ssh.TerminalModes{
+			ssh.ECHO:          0,
+			ssh.TTY_OP_ISPEED: 14400,
+			ssh.TTY_OP_OSPEED: 14400,
+		}
+		if ptyErr := session.RequestPty("vt100", 40, 80, modes); ptyErr != nil {
+			err = fmt.Errorf("request pty: %w", ptyErr)
+			return
+		}
+	}
+
+	session.Stdin = bytes.NewReader(input)
+	var stdoutBuf, stderrBuf bytes.Buffer
+	session.Stdout = &stdoutBuf
+	session.Stderr = &stderrBuf
+
+	runErr := session.Run(cmd)
+
+	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))
+	stderr = string(bytes.Trim(stderrBuf.Bytes(), "\r\n"))
+
+	if runErr != nil {
+		if exitErr, ok := runErr.(*ssh.ExitError); ok {
+			exitCode = exitErr.ExitStatus()
+			err = nil
+		} else {
+			err = runErr
+		}
+	}
+	return
+}
+
 // Download copies a remote file to a local path using the cat command over SSH.
 // NOTE: Binary files with NUL bytes may not transfer correctly; use SFTP for
 // binary transfers.

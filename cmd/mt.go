@@ -249,7 +249,8 @@ func runMTReboot(cmd *cobra.Command, args []string) error {
 		defer c.Close()
 
 		start := time.Now()
-		_, _, _, err := c.RunWithPTY("/system reboot")
+		// RouterOS prompts "Reboot, yes? [y/N]:" — answer it via stdin.
+		_, _, _, err := c.RunWithInput("/system reboot", []byte("y\n"))
 		r.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			// RouterOS disconnects immediately on reboot; connection reset is expected.
@@ -314,7 +315,8 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 
 		// Step 2: install if updates available
 		if strings.Contains(checkOut, "available") || strings.Contains(checkOut, "new") {
-			_, _, _, err = c.RunWithPTY("/system package update install")
+			// install also prompts for confirmation before reboot.
+			_, _, _, err = c.RunWithInput("/system package update install", []byte("y\n"))
 			// Device reboots on install, so connection drop is expected.
 			if err != nil && !isConnectionReset(err) {
 				r.ExitCode = 1

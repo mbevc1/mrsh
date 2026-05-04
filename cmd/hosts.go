@@ -35,7 +35,6 @@ func init() {
 	hostsCmd.AddCommand(hostsRemoveCmd)
 
 	hostsListCmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "Reveal masked passwords and sensitive fields")
-	hostsAddCmd.Flags().StringVar(&addName, "name", "", "Host entry name")
 	hostsAddCmd.Flags().StringVar(&addAddress, "address", "", "Host address or IP")
 	hostsAddCmd.Flags().StringVar(&addGroup, "group", "", "Host group")
 	hostsAddCmd.Flags().StringVar(&addUser, "user", "", "SSH user")
@@ -43,16 +42,12 @@ func init() {
 	hostsAddCmd.Flags().IntVar(&addPort, "port", 0, "SSH port (default 22)")
 	hostsAddCmd.Flags().StringVar(&addKeyFile, "key-file", "", "Path to SSH private key")
 
-	hostsUpdateCmd.Flags().StringVar(&addName, "name", "", "Name of host to update")
 	hostsUpdateCmd.Flags().StringVar(&addAddress, "address", "", "New host address")
 	hostsUpdateCmd.Flags().StringVar(&addGroup, "group", "", "New host group")
 	hostsUpdateCmd.Flags().StringVar(&addUser, "user", "", "New SSH user")
 	hostsUpdateCmd.Flags().StringVar(&addPass, "pass", "", "New SSH password or secret reference")
 	hostsUpdateCmd.Flags().IntVar(&addPort, "port", 0, "New SSH port")
 	hostsUpdateCmd.Flags().StringVar(&addKeyFile, "key-file", "", "New SSH private key path")
-
-	hostsRemoveCmd.Flags().StringVar(&removeName, "name", "", "Name of host to remove")
-	_ = hostsRemoveCmd.MarkFlagRequired("name")
 }
 
 func runHostsInit(cmd *cobra.Command, args []string) error {
@@ -148,7 +143,6 @@ func runHostsList(cmd *cobra.Command, args []string) error {
 // ---- hosts add ----
 
 var (
-	addName    string
 	addAddress string
 	addGroup   string
 	addUser    string
@@ -166,7 +160,7 @@ var hostsAddCmd = &cobra.Command{
 
 func runHostsAdd(cmd *cobra.Command, args []string) error {
 	// hosts add operates on the raw YAML file — no secret resolution needed.
-	if addName == "" {
+	if nameFlag == "" {
 		return fmt.Errorf("--name is required")
 	}
 	if addAddress == "" {
@@ -180,13 +174,13 @@ func runHostsAdd(cmd *cobra.Command, args []string) error {
 
 	// Check for duplicate name.
 	for _, h := range raw.Hosts {
-		if h["name"] == addName {
-			return fmt.Errorf("host %q already exists", addName)
+		if h["name"] == nameFlag {
+			return fmt.Errorf("host %q already exists", nameFlag)
 		}
 	}
 
 	entry := map[string]interface{}{
-		"name": addName,
+		"name": nameFlag,
 		"host": addAddress,
 	}
 	if addGroup != "" {
@@ -223,7 +217,7 @@ var hostsUpdateCmd = &cobra.Command{
 }
 
 func runHostsUpdate(cmd *cobra.Command, args []string) error {
-	if addName == "" {
+	if nameFlag == "" {
 		return fmt.Errorf("--name is required")
 	}
 
@@ -234,7 +228,7 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 
 	found := false
 	for i, h := range raw.Hosts {
-		if h["name"] == addName {
+		if h["name"] == nameFlag {
 			found = true
 			if addAddress != "" {
 				raw.Hosts[i]["host"] = addAddress
@@ -258,7 +252,7 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("host %q not found", addName)
+		return fmt.Errorf("host %q not found", nameFlag)
 	}
 
 	if err := raw.Write(cfgFile); err != nil {
@@ -270,8 +264,6 @@ func runHostsUpdate(cmd *cobra.Command, args []string) error {
 
 // ---- hosts remove ----
 
-var removeName string
-
 var hostsRemoveCmd = &cobra.Command{
 	Use:     "remove",
 	Aliases: []string{"rm", "r"},
@@ -280,6 +272,9 @@ var hostsRemoveCmd = &cobra.Command{
 }
 
 func runHostsRemove(cmd *cobra.Command, args []string) error {
+	if nameFlag == "" {
+		return fmt.Errorf("--name is required")
+	}
 	raw, err := config.ReadRaw(cfgFile)
 	if err != nil {
 		return err
@@ -287,17 +282,17 @@ func runHostsRemove(cmd *cobra.Command, args []string) error {
 
 	idx := -1
 	for i, h := range raw.Hosts {
-		if h["name"] == removeName {
+		if h["name"] == nameFlag {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		return fmt.Errorf("host %q not found", removeName)
+		return fmt.Errorf("host %q not found", nameFlag)
 	}
 
 	r := bufio.NewReader(os.Stdin)
-	answer := prompt(r, fmt.Sprintf("Remove host %q? [y/N]", removeName), "N")
+	answer := prompt(r, fmt.Sprintf("Remove host %q? [y/N]", nameFlag), "N")
 	if !strings.EqualFold(strings.TrimSpace(answer), "y") {
 		fmt.Println("Aborted.")
 		return nil
@@ -307,7 +302,7 @@ func runHostsRemove(cmd *cobra.Command, args []string) error {
 	if err := raw.Write(cfgFile); err != nil {
 		return err
 	}
-	fmt.Printf("Removed host %q from %s\n", removeName, cfgFile)
+	fmt.Printf("Removed host %q from %s\n", nameFlag, cfgFile)
 	return nil
 }
 

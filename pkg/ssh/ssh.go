@@ -183,16 +183,20 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput executes cmd via a PTY exec channel, pre-loading input into
-// stdin so RouterOS reads it the moment it calls read() on the confirmation
-// prompt — no prompt text detection needed. RouterOS terminal probes (DECID,
-// DSR) are answered in-band while waiting for the session to finish.
+// RunWithInput executes cmd via a PTY exec channel and answers a confirmation
+// prompt by watching stdout for any of the prompt patterns, then writing input.
+// RouterOS terminal probes (DECID, DSR) are answered in-band so RouterOS keeps
+// rendering. Input cannot be pre-loaded because RouterOS reads stdin during
+// terminal setup and would consume it before reaching the prompt.
 //
-// The prompts variadic parameter is accepted for API compatibility but is no
-// longer used; input is written immediately into the pipe buffer.
+// A 1-row PTY is used so RouterOS draws at most one blank line before the
+// prompt instead of scrolling a full screen (~40 lines with deliberate delays).
 func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
+	}
+	if len(prompts) == 0 {
+		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?", "y/n", "Y/N"}
 	}
 	c.debugf("%s exec-input (input=%d byte(s)): %s", c.Host, len(input), cmd)
 
@@ -204,7 +208,7 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 	defer session.Close()
 
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
+		ssh.ECHO:          0,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
@@ -245,47 +249,54 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		return
 	}
 
-	// Pre-load the confirmation into the pipe buffer. RouterOS reads it the
-	// instant it calls read() on stdin — no need to wait for the prompt text.
-	if _, werr := stdinPipe.Write(input); werr != nil {
-		c.debugf("%s write input: %v", c.Host, werr)
-	}
-
-	// Wait for the session to finish, responding to RouterOS terminal probes
-	// (DECID / DSR) as they arrive so RouterOS keeps moving.
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- session.Wait() }()
-
+	// Watch stdout for the confirmation prompt, responding to RouterOS terminal
+	// probes (DECID, DSR) as they arrive. Input is written only after the prompt
+	// is detected — writing it earlier causes RouterOS to consume it during
+	// terminal setup before the confirmation read.
 	timeoutCh := time.After(30 * time.Second)
 	lastLen := 0
-	var runErr error
-loop:
+outer:
 	for {
 		select {
-		case runErr = <-waitCh:
-			break loop
 		case <-timeoutCh:
-			c.debugf("%s session timed out", c.Host)
-			break loop
+			c.debugf("%s timed out waiting for prompt, sending input anyway", c.Host)
+			break outer
 		case <-notifyCh:
-			bufMu.Lock()
-			out := stdoutBuf.String()
-			bufMu.Unlock()
-			if len(out) > lastLen {
-				newBytes := out[lastLen:]
-				c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
-				lastLen = len(out)
-				if strings.Contains(newBytes, "\x1bZ") {
-					c.debugf("%s responding to DECID as VT100", c.Host)
-					_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
-				}
-				if strings.Contains(newBytes, "\x1b[6n") {
-					c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
-					_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
-				}
+		}
+
+		bufMu.Lock()
+		out := stdoutBuf.String()
+		bufMu.Unlock()
+
+		if len(out) > lastLen {
+			newBytes := out[lastLen:]
+			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
+			lastLen = len(out)
+			if strings.Contains(newBytes, "\x1bZ") {
+				c.debugf("%s responding to DECID as VT100", c.Host)
+				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
+			}
+			if strings.Contains(newBytes, "\x1b[6n") {
+				c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
+				_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
+			}
+		}
+
+		for _, p := range prompts {
+			if strings.Contains(out, p) {
+				c.debugf("%s prompt matched: %q", c.Host, p)
+				break outer
 			}
 		}
 	}
+
+	if _, werr := stdinPipe.Write(input); werr != nil {
+		c.debugf("%s write input: %v", c.Host, werr)
+	}
+	stdinPipe.Close()
+
+	var runErr error
+	runErr = session.Wait()
 
 	bufMu.Lock()
 	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))

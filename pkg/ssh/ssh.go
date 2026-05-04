@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -181,20 +183,24 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput executes cmd with the given bytes written to stdin shortly
-// after the command starts. Useful for commands that prompt for confirmation
-// (e.g. RouterOS "/system reboot" which asks "Reboot, yes? [y/N]:"). Honours
-// c.RequestPTY.
+// RunWithInput types cmd into an interactive shell session, waits for any of
+// the supplied prompt patterns to appear in stdout, then writes the response.
+// This is needed for commands like RouterOS "/system reboot" which prints
+// "Reboot, yes? [y/N]:" and reads from a real terminal — an exec channel
+// with a pre-buffered stdin reader does not work because the server reaches
+// stdin EOF before printing the prompt.
 //
-// Input is written asynchronously a short delay after Start so the remote has
-// time to display its prompt before reading. The stdin pipe is intentionally
-// left open: closing it (i.e. signalling EOF) causes some servers, including
-// RouterOS, to terminate the session before processing the input.
-func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, exitCode int, err error) {
+// Input is the bytes to type once a prompt is matched. Prompts is the list of
+// substrings to look for; if nil, defaults to common confirmation patterns.
+// Always uses a PTY regardless of c.RequestPTY.
+func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
 	}
-	c.debugf("%s exec with input (%d byte(s), pty=%t): %s", c.Host, len(input), c.RequestPTY, cmd)
+	if len(prompts) == 0 {
+		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?"}
+	}
+	c.debugf("%s shell-interact (input=%d byte(s)): %s", c.Host, len(input), cmd)
 
 	session, err := c.client.NewSession()
 	if err != nil {
@@ -203,16 +209,14 @@ func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, 
 	}
 	defer session.Close()
 
-	if c.RequestPTY {
-		modes := ssh.TerminalModes{
-			ssh.ECHO:          0,
-			ssh.TTY_OP_ISPEED: 14400,
-			ssh.TTY_OP_OSPEED: 14400,
-		}
-		if ptyErr := session.RequestPty("vt100", 40, 80, modes); ptyErr != nil {
-			err = fmt.Errorf("request pty: %w", ptyErr)
-			return
-		}
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          0,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if ptyErr := session.RequestPty("vt100", 40, 80, modes); ptyErr != nil {
+		err = fmt.Errorf("request pty: %w", ptyErr)
+		return
 	}
 
 	stdinPipe, err := session.StdinPipe()
@@ -220,25 +224,68 @@ func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, 
 		err = fmt.Errorf("stdin pipe: %w", err)
 		return
 	}
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
-	session.Stderr = &stderrBuf
-
-	if err = session.Start(cmd); err != nil {
-		err = fmt.Errorf("start: %w", err)
+	stdoutPipe, err := session.StdoutPipe()
+	if err != nil {
+		err = fmt.Errorf("stdout pipe: %w", err)
+		return
+	}
+	stderrPipe, err := session.StderrPipe()
+	if err != nil {
+		err = fmt.Errorf("stderr pipe: %w", err)
 		return
 	}
 
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		_, _ = stdinPipe.Write(input)
-	}()
+	var (
+		bufMu     sync.Mutex
+		stdoutBuf bytes.Buffer
+		stderrBuf bytes.Buffer
+	)
+	go streamTo(stdoutPipe, &stdoutBuf, &bufMu)
+	go streamTo(stderrPipe, &stderrBuf, &bufMu)
+
+	if err = session.Shell(); err != nil {
+		err = fmt.Errorf("shell: %w", err)
+		return
+	}
+
+	// Type the command followed by Enter.
+	if _, err = fmt.Fprintln(stdinPipe, cmd); err != nil {
+		err = fmt.Errorf("write cmd: %w", err)
+		return
+	}
+
+	// Wait for any prompt pattern to appear, up to 5s.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		bufMu.Lock()
+		out := stdoutBuf.String()
+		bufMu.Unlock()
+		matched := false
+		for _, p := range prompts {
+			if strings.Contains(out, p) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			c.debugf("%s prompt matched after %d byte(s) of stdout", c.Host, len(out))
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Type the response. Errors here are usually benign — the device may
+	// already be tearing the connection down (e.g. on /system reboot).
+	if _, werr := stdinPipe.Write(input); werr != nil {
+		c.debugf("%s write input: %v", c.Host, werr)
+	}
 
 	runErr := session.Wait()
 
+	bufMu.Lock()
 	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))
 	stderr = string(bytes.Trim(stderrBuf.Bytes(), "\r\n"))
+	bufMu.Unlock()
 
 	if runErr != nil {
 		if exitErr, ok := runErr.(*ssh.ExitError); ok {
@@ -249,6 +296,23 @@ func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, 
 		}
 	}
 	return
+}
+
+// streamTo copies r into buf until r returns an error (typically EOF when the
+// remote side closes the channel).
+func streamTo(r interface{ Read([]byte) (int, error) }, buf *bytes.Buffer, mu *sync.Mutex) {
+	chunk := make([]byte, 4096)
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			mu.Lock()
+			buf.Write(chunk[:n])
+			mu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // Download copies a remote file to a local path using the cat command over SSH.

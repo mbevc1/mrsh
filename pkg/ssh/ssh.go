@@ -183,24 +183,22 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput types cmd into an interactive shell session, waits for any of
-// the supplied prompt patterns to appear in stdout, then writes the response.
-// This is needed for commands like RouterOS "/system reboot" which prints
-// "Reboot, yes? [y/N]:" and reads from a real terminal — an exec channel
-// with a pre-buffered stdin reader does not work because the server reaches
-// stdin EOF before printing the prompt.
+// RunWithInput executes cmd via an exec channel with a PTY, waits for any of
+// the supplied prompt patterns to appear in stdout, then writes input.
+// This handles RouterOS-style confirmation prompts such as "Reboot, yes? [y/N]:".
 //
-// Input is the bytes to type once a prompt is matched. Prompts is the list of
-// substrings to look for; if nil, defaults to common confirmation patterns.
+// Unlike a shell session approach, this sends cmd directly via session.Start so
+// there is no extra shell layer between our stdin pipe and the remote process.
+// Input is sent once a prompt is matched (or after a 30 s timeout as a fallback).
 // Always uses a PTY regardless of c.RequestPTY.
 func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
 	}
 	if len(prompts) == 0 {
-		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?"}
+		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?", "y/n", "Y/N"}
 	}
-	c.debugf("%s shell-interact (input=%d byte(s)): %s", c.Host, len(input), cmd)
+	c.debugf("%s exec-input (input=%d byte(s)): %s", c.Host, len(input), cmd)
 
 	session, err := c.client.NewSession()
 	if err != nil {
@@ -210,7 +208,7 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 	defer session.Close()
 
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          0,
+		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
@@ -240,45 +238,52 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		stdoutBuf bytes.Buffer
 		stderrBuf bytes.Buffer
 	)
-	go streamTo(stdoutPipe, &stdoutBuf, &bufMu)
-	go streamTo(stderrPipe, &stderrBuf, &bufMu)
+	go c.captureTo(stdoutPipe, &stdoutBuf, &bufMu, "stdout")
+	go c.captureTo(stderrPipe, &stderrBuf, &bufMu, "stderr")
 
-	if err = session.Shell(); err != nil {
-		err = fmt.Errorf("shell: %w", err)
+	if err = session.Start(cmd); err != nil {
+		err = fmt.Errorf("start: %w", err)
 		return
 	}
 
-	// Type the command followed by Enter.
-	if _, err = fmt.Fprintln(stdinPipe, cmd); err != nil {
-		err = fmt.Errorf("write cmd: %w", err)
-		return
-	}
-
-	// Wait for any prompt pattern to appear, up to 5s.
-	deadline := time.Now().Add(5 * time.Second)
+	// Poll for any prompt pattern, up to 30 s. Log new bytes as they arrive
+	// so --debug reveals exactly what the remote side is sending.
+	deadline := time.Now().Add(30 * time.Second)
+	prompted := false
+	lastLen := 0
 	for time.Now().Before(deadline) {
 		bufMu.Lock()
 		out := stdoutBuf.String()
 		bufMu.Unlock()
-		matched := false
+
+		if len(out) > lastLen {
+			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), out[lastLen:])
+			lastLen = len(out)
+		}
+
 		for _, p := range prompts {
 			if strings.Contains(out, p) {
-				matched = true
+				c.debugf("%s prompt matched: %q", c.Host, p)
+				prompted = true
 				break
 			}
 		}
-		if matched {
-			c.debugf("%s prompt matched after %d byte(s) of stdout", c.Host, len(out))
+		if prompted {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Type the response. Errors here are usually benign — the device may
-	// already be tearing the connection down (e.g. on /system reboot).
+	if !prompted {
+		c.debugf("%s no prompt matched (stdout=%d bytes), sending input anyway", c.Host, lastLen)
+	}
+
+	// Send the response. Errors here are benign — the device may already be
+	// tearing the connection down (e.g. immediately after /system reboot).
 	if _, werr := stdinPipe.Write(input); werr != nil {
 		c.debugf("%s write input: %v", c.Host, werr)
 	}
+	stdinPipe.Close()
 
 	runErr := session.Wait()
 
@@ -298,18 +303,19 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 	return
 }
 
-// streamTo copies r into buf until r returns an error (typically EOF when the
-// remote side closes the channel).
-func streamTo(r interface{ Read([]byte) (int, error) }, buf *bytes.Buffer, mu *sync.Mutex) {
+// captureTo reads chunks from r into buf. When the client has a Debug function,
+// each chunk is logged so that interactive sessions can be diagnosed.
+func (c *Client) captureTo(r interface{ Read([]byte) (int, error) }, buf *bytes.Buffer, mu *sync.Mutex, label string) {
 	chunk := make([]byte, 4096)
 	for {
-		n, err := r.Read(chunk)
+		n, readErr := r.Read(chunk)
 		if n > 0 {
 			mu.Lock()
 			buf.Write(chunk[:n])
 			mu.Unlock()
+			c.debugf("  [%s +%d]: %q", label, n, chunk[:n])
 		}
-		if err != nil {
+		if readErr != nil {
 			return
 		}
 	}

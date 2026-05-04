@@ -181,9 +181,15 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput executes cmd with the given bytes piped to stdin. Useful for
-// commands that prompt for confirmation (e.g. RouterOS "/system reboot" which
-// asks "Reboot, yes? [y/N]:"). Honours c.RequestPTY.
+// RunWithInput executes cmd with the given bytes written to stdin shortly
+// after the command starts. Useful for commands that prompt for confirmation
+// (e.g. RouterOS "/system reboot" which asks "Reboot, yes? [y/N]:"). Honours
+// c.RequestPTY.
+//
+// Input is written asynchronously a short delay after Start so the remote has
+// time to display its prompt before reading. The stdin pipe is intentionally
+// left open: closing it (i.e. signalling EOF) causes some servers, including
+// RouterOS, to terminate the session before processing the input.
 func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
@@ -209,12 +215,27 @@ func (c *Client) RunWithInput(cmd string, input []byte) (stdout, stderr string, 
 		}
 	}
 
-	session.Stdin = bytes.NewReader(input)
+	stdinPipe, err := session.StdinPipe()
+	if err != nil {
+		err = fmt.Errorf("stdin pipe: %w", err)
+		return
+	}
+
 	var stdoutBuf, stderrBuf bytes.Buffer
 	session.Stdout = &stdoutBuf
 	session.Stderr = &stderrBuf
 
-	runErr := session.Run(cmd)
+	if err = session.Start(cmd); err != nil {
+		err = fmt.Errorf("start: %w", err)
+		return
+	}
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_, _ = stdinPipe.Write(input)
+	}()
+
+	runErr := session.Wait()
 
 	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))
 	stderr = string(bytes.Trim(stderrBuf.Bytes(), "\r\n"))

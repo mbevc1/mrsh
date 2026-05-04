@@ -183,20 +183,16 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput executes cmd via an exec channel with a PTY, waits for any of
-// the supplied prompt patterns to appear in stdout, then writes input.
-// This handles RouterOS-style confirmation prompts such as "Reboot, yes? [y/N]:".
+// RunWithInput executes cmd via a PTY exec channel, pre-loading input into
+// stdin so RouterOS reads it the moment it calls read() on the confirmation
+// prompt — no prompt text detection needed. RouterOS terminal probes (DECID,
+// DSR) are answered in-band while waiting for the session to finish.
 //
-// Unlike a shell session approach, this sends cmd directly via session.Start so
-// there is no extra shell layer between our stdin pipe and the remote process.
-// Input is sent once a prompt is matched (or after a 30 s timeout as a fallback).
-// Always uses a PTY regardless of c.RequestPTY.
+// The prompts variadic parameter is accepted for API compatibility but is no
+// longer used; input is written immediately into the pipe buffer.
 func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
-	}
-	if len(prompts) == 0 {
-		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?", "y/n", "Y/N"}
 	}
 	c.debugf("%s exec-input (input=%d byte(s)): %s", c.Host, len(input), cmd)
 
@@ -212,9 +208,8 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
-	// 1-row terminal: RouterOS measures screen height via cursor-down-9999 + DSR.
-	// Reporting row=1 tells it the screen is 1 line tall, so it draws almost
-	// nothing before the confirmation prompt instead of scrolling 40 blank lines.
+	// 1-row terminal: RouterOS measures screen height via cursor-down-9999+DSR.
+	// Row=1 means it draws nothing before the prompt instead of ~40 blank lines.
 	if ptyErr := session.RequestPty("vt100", 1, 80, modes); ptyErr != nil {
 		err = fmt.Errorf("request pty: %w", ptyErr)
 		return
@@ -241,8 +236,6 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		stdoutBuf bytes.Buffer
 		stderrBuf bytes.Buffer
 	)
-	// notifyCh is signalled by captureTo every time new bytes arrive so we
-	// react immediately instead of sleeping through a fixed poll interval.
 	notifyCh := make(chan struct{}, 32)
 	go c.captureTo(stdoutPipe, &stdoutBuf, &bufMu, "stdout", notifyCh)
 	go c.captureTo(stderrPipe, &stderrBuf, &bufMu, "stderr", nil)
@@ -252,53 +245,47 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		return
 	}
 
-	// React to data as soon as it arrives. RouterOS probes the terminal
-	// (DECID, DSR) before showing a confirmation prompt; reply in-band.
-	timeoutCh := time.After(30 * time.Second)
-	lastLen := 0
-outer:
-	for {
-		select {
-		case <-timeoutCh:
-			c.debugf("%s timed out waiting for prompt (stdout=%d bytes), sending input anyway", c.Host, lastLen)
-			break outer
-		case <-notifyCh:
-		}
-
-		bufMu.Lock()
-		out := stdoutBuf.String()
-		bufMu.Unlock()
-
-		if len(out) > lastLen {
-			newBytes := out[lastLen:]
-			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
-			lastLen = len(out)
-
-			if strings.Contains(newBytes, "\x1bZ") {
-				c.debugf("%s responding to DECID as VT100", c.Host)
-				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
-			}
-			if strings.Contains(newBytes, "\x1b[6n") {
-				c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
-				_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
-			}
-		}
-
-		for _, p := range prompts {
-			if strings.Contains(out, p) {
-				c.debugf("%s prompt matched: %q", c.Host, p)
-				break outer
-			}
-		}
-	}
-	// Send the response. Errors here are benign — the device may already be
-	// tearing the connection down (e.g. immediately after /system reboot).
+	// Pre-load the confirmation into the pipe buffer. RouterOS reads it the
+	// instant it calls read() on stdin — no need to wait for the prompt text.
 	if _, werr := stdinPipe.Write(input); werr != nil {
 		c.debugf("%s write input: %v", c.Host, werr)
 	}
-	stdinPipe.Close()
 
-	runErr := session.Wait()
+	// Wait for the session to finish, responding to RouterOS terminal probes
+	// (DECID / DSR) as they arrive so RouterOS keeps moving.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- session.Wait() }()
+
+	timeoutCh := time.After(30 * time.Second)
+	lastLen := 0
+	var runErr error
+loop:
+	for {
+		select {
+		case runErr = <-waitCh:
+			break loop
+		case <-timeoutCh:
+			c.debugf("%s session timed out", c.Host)
+			break loop
+		case <-notifyCh:
+			bufMu.Lock()
+			out := stdoutBuf.String()
+			bufMu.Unlock()
+			if len(out) > lastLen {
+				newBytes := out[lastLen:]
+				c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
+				lastLen = len(out)
+				if strings.Contains(newBytes, "\x1bZ") {
+					c.debugf("%s responding to DECID as VT100", c.Host)
+					_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
+				}
+				if strings.Contains(newBytes, "\x1b[6n") {
+					c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
+					_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
+				}
+			}
+		}
+	}
 
 	bufMu.Lock()
 	stdout = string(bytes.Trim(stdoutBuf.Bytes(), "\r\n"))

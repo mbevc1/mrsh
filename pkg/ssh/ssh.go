@@ -255,8 +255,6 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 	// Without responses RouterOS waits forever, so we answer them in-band.
 	deadline := time.Now().Add(30 * time.Second)
 	prompted := false
-	respondedDSR := false
-	respondedID := false
 	lastLen := 0
 	for time.Now().Before(deadline) {
 		bufMu.Lock()
@@ -264,19 +262,20 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		bufMu.Unlock()
 
 		if len(out) > lastLen {
-			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), out[lastLen:])
+			newBytes := out[lastLen:]
+			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
 			lastLen = len(out)
-		}
 
-		if !respondedID && strings.Contains(out, "\x1bZ") {
-			c.debugf("%s responding to DECID as VT100", c.Host)
-			_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
-			respondedID = true
-		}
-		if !respondedDSR && strings.Contains(out, "\x1b[6n") {
-			c.debugf("%s responding to DSR with cursor pos (40,80)", c.Host)
-			_, _ = stdinPipe.Write([]byte("\x1b[40;80R"))
-			respondedDSR = true
+			// RouterOS probes the terminal on each render cycle. Reply to every
+			// occurrence in new bytes so it doesn't stall between rounds.
+			if strings.Contains(newBytes, "\x1bZ") {
+				c.debugf("%s responding to DECID as VT100", c.Host)
+				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
+			}
+			if strings.Contains(newBytes, "\x1b[6n") {
+				c.debugf("%s responding to DSR with cursor pos (40,80)", c.Host)
+				_, _ = stdinPipe.Write([]byte("\x1b[40;80R"))
+			}
 		}
 
 		for _, p := range prompts {

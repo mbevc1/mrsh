@@ -313,6 +313,11 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		if exitErr, ok := runErr.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
 			err = nil
+		} else if strings.Contains(runErr.Error(), "without exit status") {
+			// Device closed the connection without sending SSH exit-status
+			// (e.g. RouterOS drops the session immediately on /system reboot).
+			exitCode = 0
+			err = nil
 		} else {
 			err = runErr
 		}

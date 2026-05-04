@@ -299,13 +299,24 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 
 	results := runParallel(hosts, parallel, func(h config.Host) Result {
 		r := Result{Host: h.Address, Name: h.Name, Group: h.Group}
-		c := mtClient(h)
+		// check-for-updates is a read command — no PTY needed, and requesting
+		// one triggers RouterOS terminal probing which stalls a plain Run call.
+		// RunWithInput manages its own PTY session for the install step.
+		c := &mrshshsh.Client{
+			Host:    h.Address,
+			User:    h.User,
+			Pass:    h.Pass,
+			KeyFile: h.KeyFile,
+			Port:    h.Port,
+			Timeout: sshTimeout(),
+			Debug:   debugf,
+		}
 		defer c.Close()
 
 		start := time.Now()
 
-		// Step 1: check for updates
-		checkOut, _, _, err := c.RunWithPTY("/system package update check-for-updates")
+		// Step 1: check for updates (non-PTY exec)
+		checkOut, _, _, err := c.Run("/system package update check-for-updates")
 		if err != nil {
 			r.ExitCode = 1
 			r.Stderr = fmt.Sprintf("check-for-updates: %v", err)
@@ -313,11 +324,10 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 			return r
 		}
 
-		// Step 2: install if updates available
+		// Step 2: install if updates are available.
+		// RouterOS prompts for confirmation and then reboots.
 		if strings.Contains(checkOut, "available") || strings.Contains(checkOut, "new") {
-			// install also prompts for confirmation before reboot.
 			_, _, _, err = c.RunWithInput("/system package update install", []byte("y\n"))
-			// Device reboots on install, so connection drop is expected.
 			if err != nil && !isConnectionReset(err) {
 				r.ExitCode = 1
 				r.Stderr = fmt.Sprintf("install: %v", err)

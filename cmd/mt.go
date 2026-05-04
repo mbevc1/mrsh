@@ -95,6 +95,7 @@ func mtClient(h config.Host) *mrshshsh.Client {
 		Port:       h.Port,
 		Timeout:    sshTimeout(),
 		RequestPTY: true,
+		Debug:      debugf,
 	}
 }
 
@@ -135,6 +136,7 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 			KeyFile: h.KeyFile,
 			Port:    h.Port,
 			Timeout: sshTimeout(),
+			Debug:   debugf,
 		}
 		defer c.Close()
 

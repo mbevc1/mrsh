@@ -23,8 +23,15 @@ type Client struct {
 	Port       int
 	Timeout    time.Duration
 	RequestPTY bool // set true for MikroTik / interactive commands
+	Debug      func(format string, args ...interface{})
 
 	client *ssh.Client
+}
+
+func (c *Client) debugf(format string, args ...interface{}) {
+	if c.Debug != nil {
+		c.Debug(format, args...)
+	}
 }
 
 // connect establishes the SSH connection using the configured auth methods.
@@ -35,15 +42,21 @@ func (c *Client) connect() error {
 	}
 
 	var authMethods []ssh.AuthMethod
+	var authNames []string
 
 	// 1. Identity file
 	if c.KeyFile != "" {
 		expanded := expandHome(c.KeyFile)
 		keyBytes, err := os.ReadFile(expanded)
-		if err == nil {
+		if err != nil {
+			c.debugf("identity file %s: %v", expanded, err)
+		} else {
 			signer, err := ssh.ParsePrivateKey(keyBytes)
-			if err == nil {
+			if err != nil {
+				c.debugf("parse private key %s: %v", expanded, err)
+			} else {
 				authMethods = append(authMethods, ssh.PublicKeys(signer))
+				authNames = append(authNames, "key:"+expanded)
 			}
 		}
 	}
@@ -51,20 +64,25 @@ func (c *Client) connect() error {
 	// 2. SSH agent (SSH_AUTH_SOCK)
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		agentConn, err := net.Dial("unix", sock)
-		if err == nil {
+		if err != nil {
+			c.debugf("ssh agent dial: %v", err)
+		} else {
 			agentClient := agent.NewClient(agentConn)
 			authMethods = append(authMethods, ssh.PublicKeysCallback(agentClient.Signers))
+			authNames = append(authNames, "agent")
 		}
 	}
 
 	// 3. Password
 	if c.Pass != "" {
 		authMethods = append(authMethods, ssh.Password(c.Pass))
+		authNames = append(authNames, "password")
 	}
 
 	if len(authMethods) == 0 {
 		return fmt.Errorf("no authentication methods available for %s", c.Host)
 	}
+	c.debugf("auth methods for %s: %v", c.Host, authNames)
 
 	hostKeyCallback := ssh.InsecureIgnoreHostKey() // TODO: use knownhosts.New for production
 	_ = knownhosts.New                             // imported to allow future enablement
@@ -87,18 +105,22 @@ func (c *Client) connect() error {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
+	c.debugf("dialing %s as %s (timeout=%s)", addr, c.User, timeout)
 	tcpConn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
+		c.debugf("dial %s failed: %v", addr, err)
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 
 	ncc, chans, reqs, err := ssh.NewClientConn(tcpConn, addr, config)
 	if err != nil {
 		tcpConn.Close()
+		c.debugf("ssh handshake %s failed: %v", addr, err)
 		return fmt.Errorf("ssh handshake %s: %w", addr, err)
 	}
 
 	c.client = ssh.NewClient(ncc, chans, reqs)
+	c.debugf("connected to %s", addr)
 	return nil
 }
 
@@ -109,6 +131,7 @@ func (c *Client) Run(cmd string) (stdout, stderr string, exitCode int, err error
 	if err = c.connect(); err != nil {
 		return
 	}
+	c.debugf("%s exec (pty=%t): %s", c.Host, c.RequestPTY, cmd)
 
 	session, err := c.client.NewSession()
 	if err != nil {

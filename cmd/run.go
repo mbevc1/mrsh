@@ -91,6 +91,7 @@ func executeOnHost(h config.Host, command string, script []byte) Result {
 		KeyFile: h.KeyFile,
 		Port:    h.Port,
 		Timeout: sshTimeout(),
+		Debug:   debugf,
 	}
 	defer client.Close()
 

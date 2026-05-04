@@ -28,6 +28,7 @@ var (
 	timeout   int
 	outputFmt string
 	dryRun    bool
+	debugFlag bool
 
 	// cfg is loaded once by PersistentPreRunE and shared across subcommands.
 	cfg *config.Config
@@ -105,6 +106,15 @@ func init() {
 	f.IntVarP(&timeout, "timeout", "t", 30, "SSH timeout in seconds")
 	f.StringVarP(&outputFmt, "output", "o", "text", "Output format: text|json|csv")
 	f.BoolVar(&dryRun, "dry-run", false, "Print what would run without executing")
+	f.BoolVar(&debugFlag, "debug", false, "Print verbose diagnostic output to stderr")
+}
+
+// debugf writes a diagnostic message to stderr when --debug is set.
+func debugf(format string, args ...interface{}) {
+	if !debugFlag {
+		return
+	}
+	colorDebug.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
 }
 
 // loadConfig loads the config file exactly once. Commands that operate on
@@ -114,11 +124,13 @@ func loadConfig() error {
 	if cfg != nil {
 		return nil
 	}
+	debugf("loading config: %s", cfgFile)
 	var err error
 	cfg, err = config.Load(cfgFile)
 	if err != nil {
 		return err
 	}
+	debugf("loaded %d host(s) from config", len(cfg.Hosts))
 	// CLI --timeout flag overrides config default.
 	if cfg.Defaults.Port == 0 {
 		cfg.Defaults.Port = 22
@@ -150,6 +162,12 @@ func filteredHosts() []config.Host {
 		}
 		hosts = filtered
 	}
+	debugf("filters: group=%q name=%q host=%q adhoc=%v -> %d host(s) matched",
+		groupFlag, nameFlag, hostFlag, adhoc, len(hosts))
+	for _, h := range hosts {
+		debugf("  target: name=%s addr=%s group=%s user=%s port=%d",
+			h.Name, h.Address, h.Group, h.User, h.Port)
+	}
 	return hosts
 }
 
@@ -168,6 +186,7 @@ func runParallel(hosts []config.Host, n int, fn func(config.Host) Result) []Resu
 	if n <= 0 {
 		n = 1
 	}
+	debugf("running on %d host(s) with parallelism=%d", len(hosts), n)
 	sem := make(chan struct{}, n)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -206,10 +225,11 @@ func printResults(results []Result, format string) {
 }
 
 var (
-	colorHeader  = color.New(color.Bold)
-	colorHost    = color.New(color.FgCyan, color.Bold)
-	colorOK      = color.New(color.FgGreen)
-	colorFail    = color.New(color.FgRed)
+	colorHeader = color.New(color.Bold)
+	colorHost   = color.New(color.FgCyan, color.Bold)
+	colorOK     = color.New(color.FgGreen)
+	colorFail   = color.New(color.FgRed)
+	colorDebug  = color.New(color.FgYellow)
 )
 
 func printText(results []Result) {

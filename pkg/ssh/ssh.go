@@ -248,8 +248,15 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 
 	// Poll for any prompt pattern, up to 30 s. Log new bytes as they arrive
 	// so --debug reveals exactly what the remote side is sending.
+	//
+	// RouterOS probes the terminal before showing a confirmation prompt:
+	//   \x1bZ    (DECID) — identify yourself
+	//   \x1b[6n  (DSR)   — where is the cursor? (used to detect screen size)
+	// Without responses RouterOS waits forever, so we answer them in-band.
 	deadline := time.Now().Add(30 * time.Second)
 	prompted := false
+	respondedDSR := false
+	respondedID := false
 	lastLen := 0
 	for time.Now().Before(deadline) {
 		bufMu.Lock()
@@ -259,6 +266,17 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		if len(out) > lastLen {
 			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), out[lastLen:])
 			lastLen = len(out)
+		}
+
+		if !respondedID && strings.Contains(out, "\x1bZ") {
+			c.debugf("%s responding to DECID as VT100", c.Host)
+			_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
+			respondedID = true
+		}
+		if !respondedDSR && strings.Contains(out, "\x1b[6n") {
+			c.debugf("%s responding to DSR with cursor pos (40,80)", c.Host)
+			_, _ = stdinPipe.Write([]byte("\x1b[40;80R"))
+			respondedDSR = true
 		}
 
 		for _, p := range prompts {

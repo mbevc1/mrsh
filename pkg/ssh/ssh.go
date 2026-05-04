@@ -212,7 +212,10 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
-	if ptyErr := session.RequestPty("vt100", 40, 80, modes); ptyErr != nil {
+	// 1-row terminal: RouterOS measures screen height via cursor-down-9999 + DSR.
+	// Reporting row=1 tells it the screen is 1 line tall, so it draws almost
+	// nothing before the confirmation prompt instead of scrolling 40 blank lines.
+	if ptyErr := session.RequestPty("vt100", 1, 80, modes); ptyErr != nil {
 		err = fmt.Errorf("request pty: %w", ptyErr)
 		return
 	}
@@ -276,8 +279,8 @@ outer:
 				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
 			}
 			if strings.Contains(newBytes, "\x1b[6n") {
-				c.debugf("%s responding to DSR with cursor pos (40,80)", c.Host)
-				_, _ = stdinPipe.Write([]byte("\x1b[40;80R"))
+				c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
+				_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
 			}
 		}
 

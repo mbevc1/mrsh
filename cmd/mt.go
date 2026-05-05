@@ -212,7 +212,9 @@ func runMTReboot(cmd *cobra.Command, args []string) error {
 		defer c.Close()
 
 		start := time.Now()
-		_, _, _, err := c.RunWithInput("/system reboot", []byte("y\n"))
+		// No PTY — RouterOS skips the confirmation prompt in non-interactive
+		// sessions and reboots immediately, dropping the connection.
+		_, _, _, err := c.Run("/system reboot")
 		r.DurationMs = time.Since(start).Milliseconds()
 		if err != nil && !isConnectionReset(err) {
 			r.ExitCode = 1

@@ -246,11 +246,12 @@ func (c *Client) RunWithInput(cmd string, input []byte, _ ...string) (stdout, st
 		return
 	}
 
-	// settle fires 500 ms after the last DSR/DECID probe response.
-	// We use AfterFunc so it resets cleanly each time a new probe arrives.
-	settle := make(chan struct{}, 1)
-	var settleTimer *time.Timer
+	// Reply to RouterOS terminal probes. The moment we see the first
+	// non-probe data chunk after probing, RouterOS is rendering — the
+	// confirmation prompt is on screen and our input can be sent.
+	// No timer needed: the probe→non-probe transition is deterministic.
 	deadline := time.After(30 * time.Second)
+	seenProbe := false
 	lastLen := 0
 
 loop:
@@ -258,9 +259,6 @@ loop:
 		select {
 		case <-deadline:
 			c.debugf("%s deadline reached, sending input", c.Host)
-			break loop
-		case <-settle:
-			c.debugf("%s probes settled, sending input", c.Host)
 			break loop
 		case <-notifyCh:
 			bufMu.Lock()
@@ -285,22 +283,14 @@ loop:
 				_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
 				hasProbe = true
 			}
+
 			if hasProbe {
-				if settleTimer != nil {
-					settleTimer.Stop()
-				}
-				settleTimer = time.AfterFunc(500*time.Millisecond, func() {
-					select {
-					case settle <- struct{}{}:
-					default:
-					}
-				})
+				seenProbe = true
+			} else if seenProbe {
+				c.debugf("%s probing done, sending input", c.Host)
+				break loop
 			}
 		}
-	}
-
-	if settleTimer != nil {
-		settleTimer.Stop()
 	}
 	if _, werr := stdinPipe.Write(input); werr != nil {
 		c.debugf("%s write input: %v", c.Host, werr)

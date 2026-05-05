@@ -153,6 +153,8 @@ func parseROSVersion(output string) string {
 func parsePackageList(output string) string {
 	var packages []string
 	inPkgSection := false
+	nameOffset := -1
+
 	for _, line := range strings.Split(output, "\n") {
 		if strings.Contains(line, "---") {
 			inPkgSection = true
@@ -161,15 +163,54 @@ func parsePackageList(output string) string {
 		if !inPkgSection {
 			continue
 		}
+
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && isNumeric(fields[0]) {
+		if len(fields) == 0 {
+			continue
+		}
+
+		// Header row: use character offset of NAME for aligned extraction.
+		if fields[0] == "#" {
+			if idx := strings.Index(line, "NAME"); idx >= 0 {
+				nameOffset = idx
+			}
+			continue
+		}
+
+		if !isNumeric(fields[0]) || len(fields) < 2 {
+			continue
+		}
+
+		if nameOffset > 0 && len(line) > nameOffset {
+			// Character-aligned extraction handles flag columns cleanly.
+			if parts := strings.Fields(line[nameOffset:]); len(parts) > 0 {
+				packages = append(packages, parts[0])
+			}
+		} else if isROSFlags(fields[1]) && len(fields) >= 3 {
+			// Heuristic fallback: flag token before name (e.g. "2 XA routeros 7.22").
+			packages = append(packages, fields[2])
+		} else {
 			packages = append(packages, fields[1])
 		}
 	}
+
 	if len(packages) == 0 {
 		return "n/a"
 	}
 	return strings.Join(packages, ", ")
+}
+
+// isROSFlags reports whether s looks like a RouterOS flags string (e.g. "X", "XA").
+func isROSFlags(s string) bool {
+	if len(s) == 0 || len(s) > 4 {
+		return false
+	}
+	for _, c := range s {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func isNumeric(s string) bool {

@@ -23,9 +23,10 @@ var mtCmd = &cobra.Command{
 	Long: `mt provides shortcut subcommands for common MikroTik RouterOS operations
 such as backup, reboot, package upgrade, and version reporting.
 
-Subcommands use the RouterOS API (port 8729 TLS by default) which avoids
-SSH terminal emulation overhead. Use --api-port 8728 --api-tls=false for
-devices without a valid TLS certificate configured.`,
+Subcommands connect via the RouterOS API (port 8728 plain by default).
+To use TLS (port 8729) you must first assign a certificate on the device:
+  /ip service set api-ssl certificate=<cert-name>
+Then pass: --api-port 8729 --api-tls`,
 }
 
 // ---- mt version ----
@@ -87,8 +88,8 @@ func init() {
 	mtCmd.AddCommand(mtUpgradeCmd)
 	mtCmd.AddCommand(mtBackupCmd)
 
-	mtCmd.PersistentFlags().IntVar(&mtAPIPort, "api-port", 8729, "RouterOS API port (8728=plain, 8729=TLS)")
-	mtCmd.PersistentFlags().BoolVar(&mtAPITLS, "api-tls", true, "Use TLS for RouterOS API connection")
+	mtCmd.PersistentFlags().IntVar(&mtAPIPort, "api-port", 8728, "RouterOS API port (8728=plain, 8729=TLS)")
+	mtCmd.PersistentFlags().BoolVar(&mtAPITLS, "api-tls", false, "Use TLS for RouterOS API (requires certificate on device)")
 
 	mtRebootCmd.Flags().BoolVar(&mtRebootConfirm, "confirm", false, "Skip confirmation prompt")
 	mtUpgradeCmd.Flags().BoolVar(&mtUpgradeConfirm, "confirm", false, "Skip confirmation prompt")

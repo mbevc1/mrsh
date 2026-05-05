@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/mbevc1/mrsh/pkg/config"
 	"github.com/spf13/cobra"
 )
@@ -114,7 +114,7 @@ func debugf(format string, args ...interface{}) {
 	if !debugFlag {
 		return
 	}
-	colorDebug.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
+	fmt.Fprint(os.Stderr, colorDebug.Render(fmt.Sprintf("[debug] "+format+"\n", args...)))
 }
 
 // loadConfig loads the config file exactly once. Commands that operate on
@@ -225,25 +225,39 @@ func printResults(results []Result, format string) {
 }
 
 var (
-	colorHeader = color.New(color.Bold)
-	colorHost   = color.New(color.FgCyan, color.Bold)
-	colorOK     = color.New(color.FgGreen)
-	colorFail   = color.New(color.FgRed)
-	colorDebug  = color.New(color.FgYellow)
+	colorHeader = lipgloss.NewStyle().Bold(true)
+	colorHost   = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+	colorOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	colorFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	colorDebug  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
+// newTable returns a lipgloss table with the project's default column-aligned,
+// borderless style. Callers chain .Headers() and .Row() before calling .Render().
+func newTable() *table.Table {
+	return table.New().
+		Border(lipgloss.HiddenBorder()).
+		BorderLeft(false).BorderRight(false).
+		BorderTop(false).BorderBottom(false).
+		BorderRow(false).BorderHeader(false).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return colorHeader.PaddingRight(1)
+			}
+			return lipgloss.NewStyle().PaddingRight(1)
+		})
+}
+
 func printText(results []Result) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, colorHeader.Sprint("HOST\tNAME\tGROUP\tEXIT\tDURATION"))
+	t := newTable().Headers("HOST", "NAME", "GROUP", "EXIT", "DURATION")
 	for _, r := range results {
-		exit := colorOK.Sprintf("%d", r.ExitCode)
+		exit := colorOK.Render(fmt.Sprintf("%d", r.ExitCode))
 		if r.ExitCode != 0 {
-			exit = colorFail.Sprintf("%d", r.ExitCode)
+			exit = colorFail.Render(fmt.Sprintf("%d", r.ExitCode))
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dms\n",
-			r.Host, r.Name, r.Group, exit, r.DurationMs)
+		t.Row(r.Host, r.Name, r.Group, exit, fmt.Sprintf("%dms", r.DurationMs))
 	}
-	w.Flush()
+	fmt.Println(t.Render())
 
 	for _, r := range results {
 		output := r.Stdout
@@ -253,7 +267,7 @@ func printText(results []Result) {
 		if output == "" {
 			continue
 		}
-		fmt.Printf("\n[%s]\n%s\n", colorHost.Sprint(r.Host), output)
+		fmt.Printf("\n[%s]\n%s\n", colorHost.Render(r.Host), output)
 	}
 }
 

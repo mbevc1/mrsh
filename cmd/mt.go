@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/mbevc1/mrsh/pkg/config"
@@ -124,17 +123,50 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 		return r
 	})
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, colorHeader.Sprint("HOST\tNAME\tROUTEROS\tPACKAGES"))
-	for _, r := range results {
+	type vrow struct{ host, name, ver, pkgs string; isErr bool }
+	rows := make([]vrow, len(results))
+	for i, r := range results {
+		rows[i] = vrow{host: r.Host, name: r.Name}
 		if r.ExitCode != 0 {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Host, r.Name, colorFail.Sprint("ERROR"), r.Stderr)
-			continue
+			rows[i].ver, rows[i].pkgs, rows[i].isErr = "ERROR", r.Stderr, true
+		} else {
+			rows[i].ver = parseROSVersion(r.Stdout)
+			rows[i].pkgs = parsePackageList(r.Stdout)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Host, r.Name,
-			parseROSVersion(r.Stdout), parsePackageList(r.Stdout))
 	}
-	return w.Flush()
+
+	// Compute widths from plain text so ANSI codes don't skew padding.
+	w0, w1, w2 := len("HOST"), len("NAME"), len("ROUTEROS")
+	for _, r := range rows {
+		if n := len(r.host); n > w0 {
+			w0 = n
+		}
+		if n := len(r.name); n > w1 {
+			w1 = n
+		}
+		if n := len(r.ver); n > w2 {
+			w2 = n
+		}
+	}
+
+	const sep = "  "
+	fmt.Printf("%s%s%s%s%s%s%s\n",
+		colorHeader.Sprint("HOST"), strings.Repeat(" ", w0-len("HOST"))+sep,
+		colorHeader.Sprint("NAME"), strings.Repeat(" ", w1-len("NAME"))+sep,
+		colorHeader.Sprint("ROUTEROS"), strings.Repeat(" ", w2-len("ROUTEROS"))+sep,
+		colorHeader.Sprint("PACKAGES"))
+	for _, r := range rows {
+		if r.isErr {
+			fmt.Printf("%-*s%s%-*s%s%s%s%s\n",
+				w0, r.host, sep, w1, r.name, sep,
+				colorFail.Sprint("ERROR"), sep, r.pkgs)
+		} else {
+			fmt.Printf("%-*s%s%-*s%s%-*s%s%s\n",
+				w0, r.host, sep, w1, r.name, sep,
+				w2, r.ver, sep, r.pkgs)
+		}
+	}
+	return nil
 }
 
 func parseROSVersion(output string) string {

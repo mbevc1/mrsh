@@ -123,15 +123,15 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 		return r
 	})
 
-	t := newTable().Headers("HOST", "NAME", "ROUTEROS", "PACKAGES")
-	for _, r := range results {
+	rows := make([][]string, len(results))
+	for i, r := range results {
 		if r.ExitCode != 0 {
-			t.Row(r.Host, r.Name, colorFail.Render("ERROR"), r.Stderr)
+			rows[i] = []string{r.Host, r.Name, colorFail.Sprint("ERROR"), r.Stderr}
 		} else {
-			t.Row(r.Host, r.Name, parseROSVersion(r.Stdout), parsePackageList(r.Stdout))
+			rows[i] = []string{r.Host, r.Name, parseROSVersion(r.Stdout), parsePackageList(r.Stdout)}
 		}
 	}
-	fmt.Println(t.Render())
+	printTable([]string{"HOST", "NAME", "ROUTEROS", "PACKAGES"}, rows)
 	return nil
 }
 

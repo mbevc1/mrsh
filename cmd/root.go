@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
+	"github.com/fatih/color"
 	"github.com/mbevc1/mrsh/pkg/config"
 	"github.com/spf13/cobra"
 )
@@ -114,7 +114,7 @@ func debugf(format string, args ...interface{}) {
 	if !debugFlag {
 		return
 	}
-	fmt.Fprint(os.Stderr, colorDebug.Render(fmt.Sprintf("[debug] "+format+"\n", args...)))
+	colorDebug.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
 }
 
 // loadConfig loads the config file exactly once. Commands that operate on
@@ -225,39 +225,65 @@ func printResults(results []Result, format string) {
 }
 
 var (
-	colorHeader = lipgloss.NewStyle().Bold(true)
-	colorHost   = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
-	colorOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	colorFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	colorDebug  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	colorHeader = color.New(color.Bold)
+	colorHost   = color.New(color.FgCyan, color.Bold)
+	colorOK     = color.New(color.FgGreen)
+	colorFail   = color.New(color.FgRed)
+	colorDebug  = color.New(color.FgYellow)
 )
 
-// newTable returns a lipgloss table with the project's default column-aligned,
-// borderless style. Callers chain .Headers() and .Row() before calling .Render().
-func newTable() *table.Table {
-	return table.New().
-		Border(lipgloss.HiddenBorder()).
-		BorderLeft(false).BorderRight(false).
-		BorderTop(false).BorderBottom(false).
-		BorderRow(false).BorderHeader(false).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			if row == table.HeaderRow {
-				return colorHeader.PaddingRight(1)
+// ansiEsc matches ANSI SGR escape sequences so we can measure visible width.
+var ansiEsc = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// visLen returns the visible character width of s, stripping ANSI escape codes.
+func visLen(s string) int {
+	return len(ansiEsc.ReplaceAllString(s, ""))
+}
+
+// printTable prints a column-aligned table with a bold header row.
+// Cells may contain ANSI escape codes; column widths are derived from visible
+// characters only, so coloured cells don't skew alignment.
+func printTable(headers []string, rows [][]string) {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if w := visLen(cell); w > widths[i] {
+				widths[i] = w
 			}
-			return lipgloss.NewStyle().PaddingRight(1)
-		})
+		}
+	}
+	pr := func(cells []string) {
+		for i, cell := range cells {
+			fmt.Print(cell)
+			if i < len(cells)-1 {
+				fmt.Print(strings.Repeat(" ", widths[i]-visLen(cell)+2))
+			}
+		}
+		fmt.Println()
+	}
+	styledHdrs := make([]string, len(headers))
+	for i, h := range headers {
+		styledHdrs[i] = colorHeader.Sprint(h)
+	}
+	pr(styledHdrs)
+	for _, row := range rows {
+		pr(row)
+	}
 }
 
 func printText(results []Result) {
-	t := newTable().Headers("HOST", "NAME", "GROUP", "EXIT", "DURATION")
-	for _, r := range results {
-		exit := colorOK.Render(fmt.Sprintf("%d", r.ExitCode))
+	rows := make([][]string, len(results))
+	for i, r := range results {
+		exit := colorOK.Sprintf("%d", r.ExitCode)
 		if r.ExitCode != 0 {
-			exit = colorFail.Render(fmt.Sprintf("%d", r.ExitCode))
+			exit = colorFail.Sprintf("%d", r.ExitCode)
 		}
-		t.Row(r.Host, r.Name, r.Group, exit, fmt.Sprintf("%dms", r.DurationMs))
+		rows[i] = []string{r.Host, r.Name, r.Group, exit, fmt.Sprintf("%dms", r.DurationMs)}
 	}
-	fmt.Println(t.Render())
+	printTable([]string{"HOST", "NAME", "GROUP", "EXIT", "DURATION"}, rows)
 
 	for _, r := range results {
 		output := r.Stdout
@@ -267,7 +293,7 @@ func printText(results []Result) {
 		if output == "" {
 			continue
 		}
-		fmt.Printf("\n[%s]\n%s\n", colorHost.Render(r.Host), output)
+		fmt.Printf("\n[%s]\n%s\n", colorHost.Sprint(r.Host), output)
 	}
 }
 

@@ -81,8 +81,7 @@ func init() {
 	mtBackupCmd.Flags().StringVar(&mtBackupPath, "path", "backups", "Local directory for backup files")
 }
 
-// sshClient creates a plain SSH client for RouterOS. Read-only / non-interactive
-// commands do not need a PTY; RunWithInput manages its own PTY session internally.
+// sshClient creates a plain SSH client for RouterOS.
 func sshClient(h config.Host) *mrshshsh.Client {
 	return &mrshshsh.Client{
 		Host:    h.Address,

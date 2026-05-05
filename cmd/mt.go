@@ -2,16 +2,13 @@ package cmd
 
 import (
 	"bufio"
-	"crypto/tls"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	routeros "github.com/go-routeros/routeros/v3"
 	"github.com/mbevc1/mrsh/pkg/config"
 	mrshshsh "github.com/mbevc1/mrsh/pkg/ssh"
 	"github.com/spf13/cobra"
@@ -23,10 +20,7 @@ var mtCmd = &cobra.Command{
 	Long: `mt provides shortcut subcommands for common MikroTik RouterOS operations
 such as backup, reboot, package upgrade, and version reporting.
 
-Subcommands connect via the RouterOS API (port 8728 plain by default).
-To use TLS (port 8729) you must first assign a certificate on the device:
-  /ip service set api-ssl certificate=<cert-name>
-Then pass: --api-port 8729 --api-tls`,
+All mt subcommands connect over standard SSH (port 22).`,
 }
 
 // ---- mt version ----
@@ -74,13 +68,6 @@ var mtBackupCmd = &cobra.Command{
 	RunE:    runMTBackup,
 }
 
-// ---- API connection flags ----
-
-var (
-	mtAPIPort int
-	mtAPITLS  bool
-)
-
 func init() {
 	rootCmd.AddCommand(mtCmd)
 	mtCmd.AddCommand(mtVersionCmd)
@@ -88,28 +75,14 @@ func init() {
 	mtCmd.AddCommand(mtUpgradeCmd)
 	mtCmd.AddCommand(mtBackupCmd)
 
-	mtCmd.PersistentFlags().IntVar(&mtAPIPort, "api-port", 8728, "RouterOS API port (8728=plain, 8729=TLS)")
-	mtCmd.PersistentFlags().BoolVar(&mtAPITLS, "api-tls", false, "Use TLS for RouterOS API (requires certificate on device)")
-
 	mtRebootCmd.Flags().BoolVar(&mtRebootConfirm, "confirm", false, "Skip confirmation prompt")
 	mtUpgradeCmd.Flags().BoolVar(&mtUpgradeConfirm, "confirm", false, "Skip confirmation prompt")
 	mtBackupCmd.Flags().StringVar(&mtBackupFormat, "format", "rsc", "Backup format: rsc|backup|both")
 	mtBackupCmd.Flags().StringVar(&mtBackupPath, "path", "backups", "Local directory for backup files")
 }
 
-// rosClient opens a RouterOS API connection to h.
-func rosClient(h config.Host) (*routeros.Client, error) {
-	addr := net.JoinHostPort(h.Address, fmt.Sprintf("%d", mtAPIPort))
-	timeout := sshTimeout()
-	if mtAPITLS {
-		return routeros.DialTLSTimeout(addr, h.User, h.Pass, &tls.Config{
-			InsecureSkipVerify: true, // RouterOS ships with self-signed certs by default
-		}, timeout)
-	}
-	return routeros.DialTimeout(addr, h.User, h.Pass, timeout)
-}
-
-// sshClient creates a plain SSH client used by backup (file download still needs SSH).
+// sshClient creates a plain SSH client for RouterOS. Read-only / non-interactive
+// commands do not need a PTY; RunWithInput manages its own PTY session internally.
 func sshClient(h config.Host) *mrshshsh.Client {
 	return &mrshshsh.Client{
 		Host:    h.Address,
@@ -135,18 +108,11 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 
 	results := runParallel(hosts, parallel, func(h config.Host) Result {
 		r := Result{Host: h.Address, Name: h.Name, Group: h.Group}
-		start := time.Now()
-
-		c, err := rosClient(h)
-		if err != nil {
-			r.ExitCode = 1
-			r.Stderr = err.Error()
-			r.DurationMs = time.Since(start).Milliseconds()
-			return r
-		}
+		c := sshClient(h)
 		defer c.Close()
 
-		resReply, err := c.Run("/system/resource/print")
+		start := time.Now()
+		resOut, _, _, err := c.Run("/system resource print")
 		r.DurationMs = time.Since(start).Milliseconds()
 		if err != nil {
 			r.ExitCode = 1
@@ -154,26 +120,8 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 			return r
 		}
 
-		rosVer := "unknown"
-		if len(resReply.Re) > 0 {
-			if v := resReply.Re[0].Map["version"]; v != "" {
-				rosVer = v
-			}
-		}
-
-		pkgReply, _ := c.Run("/system/package/print")
-		var pkgs []string
-		for _, re := range pkgReply.Re {
-			if name := re.Map["name"]; name != "" {
-				pkgs = append(pkgs, name)
-			}
-		}
-
-		pkgStr := "n/a"
-		if len(pkgs) > 0 {
-			pkgStr = strings.Join(pkgs, ", ")
-		}
-		r.Stdout = rosVer + "\x00" + pkgStr
+		pkgOut, _, _, _ := c.Run("/system package print")
+		r.Stdout = resOut + "\n---\n" + pkgOut
 		return r
 	})
 
@@ -184,17 +132,54 @@ func runMTVersion(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Host, r.Name, colorFail.Sprint("ERROR"), r.Stderr)
 			continue
 		}
-		parts := strings.SplitN(r.Stdout, "\x00", 2)
-		rosVer, pkgs := "unknown", "n/a"
-		if len(parts) > 0 {
-			rosVer = parts[0]
-		}
-		if len(parts) > 1 {
-			pkgs = parts[1]
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Host, r.Name, rosVer, pkgs)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Host, r.Name,
+			parseROSVersion(r.Stdout), parsePackageList(r.Stdout))
 	}
 	return w.Flush()
+}
+
+func parseROSVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "version:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return "unknown"
+}
+
+func parsePackageList(output string) string {
+	var packages []string
+	inPkgSection := false
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "---") {
+			inPkgSection = true
+			continue
+		}
+		if !inPkgSection {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && isNumeric(fields[0]) {
+			packages = append(packages, fields[1])
+		}
+	}
+	if len(packages) == 0 {
+		return "n/a"
+	}
+	return strings.Join(packages, ", ")
+}
+
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // ---- mt reboot ----
@@ -223,18 +208,12 @@ func runMTReboot(cmd *cobra.Command, args []string) error {
 
 	results := runParallel(hosts, parallel, func(h config.Host) Result {
 		r := Result{Host: h.Address, Name: h.Name, Group: h.Group}
-		c, err := rosClient(h)
-		if err != nil {
-			r.ExitCode = 1
-			r.Stderr = err.Error()
-			return r
-		}
+		c := sshClient(h)
 		defer c.Close()
 
 		start := time.Now()
-		_, err = c.Run("/system/reboot")
+		_, _, _, err := c.RunWithInput("/system reboot", []byte("y\n"))
 		r.DurationMs = time.Since(start).Milliseconds()
-		// RouterOS drops the connection immediately on reboot — that's expected.
 		if err != nil && !isConnectionReset(err) {
 			r.ExitCode = 1
 			r.Stderr = err.Error()
@@ -275,17 +254,12 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 
 	results := runParallel(hosts, parallel, func(h config.Host) Result {
 		r := Result{Host: h.Address, Name: h.Name, Group: h.Group}
-		c, err := rosClient(h)
-		if err != nil {
-			r.ExitCode = 1
-			r.Stderr = err.Error()
-			return r
-		}
+		c := sshClient(h)
 		defer c.Close()
 
 		start := time.Now()
 
-		checkReply, err := c.Run("/system/package/update/check-for-updates")
+		checkOut, _, _, err := c.Run("/system package update check-for-updates")
 		if err != nil {
 			r.ExitCode = 1
 			r.Stderr = fmt.Sprintf("check-for-updates: %v", err)
@@ -293,20 +267,8 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 			return r
 		}
 
-		hasUpdate := false
-		for _, re := range checkReply.Re {
-			latest := re.Map["latest-version"]
-			installed := re.Map["installed-version"]
-			if (latest != "" && latest != installed) ||
-				strings.Contains(strings.ToLower(re.Map["status"]), "new") {
-				hasUpdate = true
-				break
-			}
-		}
-
-		if hasUpdate {
-			_, err = c.Run("/system/package/update/install")
-			// RouterOS reboots immediately after install — connection drop is expected.
+		if strings.Contains(checkOut, "available") || strings.Contains(checkOut, "new") {
+			_, _, _, err = c.RunWithInput("/system package update install", []byte("y\n"))
 			if err != nil && !isConnectionReset(err) {
 				r.ExitCode = 1
 				r.Stderr = fmt.Sprintf("install: %v", err)
@@ -337,8 +299,6 @@ func isConnectionReset(err error) bool {
 }
 
 // ---- mt backup ----
-// Backup still uses SSH: the RouterOS API has no file-download mechanism,
-// so we need SSH to transfer the exported/saved files.
 
 func runMTBackup(cmd *cobra.Command, args []string) error {
 	if err := loadConfig(); err != nil {
@@ -406,14 +366,11 @@ func doRSCBackup(c *mrshshsh.Client, h config.Host, name, localDir string) (stri
 	if err != nil {
 		return "", fmt.Errorf("export: %w", err)
 	}
-
 	time.Sleep(500 * time.Millisecond)
-
 	local := filepath.Join(localDir, name+".rsc")
 	if err := c.Download(name+".rsc", local); err != nil {
 		return "", fmt.Errorf("download rsc: %w", err)
 	}
-
 	_, _, _, _ = c.Run(fmt.Sprintf("/file remove %s.rsc", name))
 	return fmt.Sprintf("RSC saved to %s", local), nil
 }
@@ -423,14 +380,11 @@ func doBinaryBackup(c *mrshshsh.Client, h config.Host, name, localDir string) (s
 	if err != nil {
 		return "", fmt.Errorf("backup save: %w", err)
 	}
-
 	time.Sleep(500 * time.Millisecond)
-
 	local := filepath.Join(localDir, name+".backup")
 	if err := c.Download(name+".backup", local); err != nil {
 		return "", fmt.Errorf("download backup: %w", err)
 	}
-
 	_, _, _, _ = c.Run(fmt.Sprintf("/file remove %s.backup", name))
 	return fmt.Sprintf("backup saved to %s", local), nil
 }

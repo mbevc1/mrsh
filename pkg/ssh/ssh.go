@@ -183,20 +183,19 @@ func (c *Client) RunWithPTY(cmd string) (stdout, stderr string, exitCode int, er
 	return c.Run(cmd)
 }
 
-// RunWithInput executes cmd via a PTY exec channel and answers a confirmation
-// prompt by watching stdout for any of the prompt patterns, then writing input.
-// RouterOS terminal probes (DECID, DSR) are answered in-band so RouterOS keeps
-// rendering. Input cannot be pre-loaded because RouterOS reads stdin during
-// terminal setup and would consume it before reaching the prompt.
+// RunWithInput executes cmd via a PTY exec channel and sends input once
+// RouterOS has finished terminal probing. RouterOS probes the terminal with
+// DECID (\x1bZ) and DSR (\x1b[6n) queries before showing any prompt; we
+// answer each one and start a 500 ms settle timer after every response.
+// When the timer fires — meaning no new probes for 500 ms — we write input
+// without waiting for specific prompt text. This avoids pre-loading stdin
+// (which RouterOS consumes during setup) and avoids fragile text matching.
 //
-// A 1-row PTY is used so RouterOS draws at most one blank line before the
-// prompt instead of scrolling a full screen (~40 lines with deliberate delays).
-func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdout, stderr string, exitCode int, err error) {
+// A 1-row PTY is used so RouterOS draws nothing before the prompt instead
+// of scrolling ~40 blank lines with per-line delays.
+func (c *Client) RunWithInput(cmd string, input []byte, _ ...string) (stdout, stderr string, exitCode int, err error) {
 	if err = c.connect(); err != nil {
 		return
-	}
-	if len(prompts) == 0 {
-		prompts = []string{"[y/N]", "[Y/n]", "(y/n)", "yes?", "y/n", "Y/N"}
 	}
 	c.debugf("%s exec-input (input=%d byte(s)): %s", c.Host, len(input), cmd)
 
@@ -212,8 +211,6 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
-	// 1-row terminal: RouterOS measures screen height via cursor-down-9999+DSR.
-	// Row=1 means it draws nothing before the prompt instead of ~40 blank lines.
 	if ptyErr := session.RequestPty("vt100", 1, 80, modes); ptyErr != nil {
 		err = fmt.Errorf("request pty: %w", ptyErr)
 		return
@@ -249,47 +246,62 @@ func (c *Client) RunWithInput(cmd string, input []byte, prompts ...string) (stdo
 		return
 	}
 
-	// Watch stdout for the confirmation prompt, responding to RouterOS terminal
-	// probes (DECID, DSR) as they arrive. Input is written only after the prompt
-	// is detected — writing it earlier causes RouterOS to consume it during
-	// terminal setup before the confirmation read.
-	timeoutCh := time.After(30 * time.Second)
+	// settle fires 500 ms after the last DSR/DECID probe response.
+	// We use AfterFunc so it resets cleanly each time a new probe arrives.
+	settle := make(chan struct{}, 1)
+	var settleTimer *time.Timer
+	deadline := time.After(30 * time.Second)
 	lastLen := 0
-outer:
+
+loop:
 	for {
 		select {
-		case <-timeoutCh:
-			c.debugf("%s timed out waiting for prompt, sending input anyway", c.Host)
-			break outer
+		case <-deadline:
+			c.debugf("%s deadline reached, sending input", c.Host)
+			break loop
+		case <-settle:
+			c.debugf("%s probes settled, sending input", c.Host)
+			break loop
 		case <-notifyCh:
-		}
+			bufMu.Lock()
+			out := stdoutBuf.String()
+			bufMu.Unlock()
 
-		bufMu.Lock()
-		out := stdoutBuf.String()
-		bufMu.Unlock()
-
-		if len(out) > lastLen {
+			if len(out) <= lastLen {
+				continue
+			}
 			newBytes := out[lastLen:]
 			c.debugf("%s stdout[%d:%d]: %q", c.Host, lastLen, len(out), newBytes)
 			lastLen = len(out)
+
+			hasProbe := false
 			if strings.Contains(newBytes, "\x1bZ") {
-				c.debugf("%s responding to DECID as VT100", c.Host)
+				c.debugf("%s responding to DECID", c.Host)
 				_, _ = stdinPipe.Write([]byte("\x1b[?1;0c"))
+				hasProbe = true
 			}
 			if strings.Contains(newBytes, "\x1b[6n") {
-				c.debugf("%s responding to DSR with cursor pos (1,80)", c.Host)
+				c.debugf("%s responding to DSR (1,80)", c.Host)
 				_, _ = stdinPipe.Write([]byte("\x1b[1;80R"))
+				hasProbe = true
 			}
-		}
-
-		for _, p := range prompts {
-			if strings.Contains(out, p) {
-				c.debugf("%s prompt matched: %q", c.Host, p)
-				break outer
+			if hasProbe {
+				if settleTimer != nil {
+					settleTimer.Stop()
+				}
+				settleTimer = time.AfterFunc(500*time.Millisecond, func() {
+					select {
+					case settle <- struct{}{}:
+					default:
+					}
+				})
 			}
 		}
 	}
 
+	if settleTimer != nil {
+		settleTimer.Stop()
+	}
 	if _, werr := stdinPipe.Write(input); werr != nil {
 		c.debugf("%s write input: %v", c.Host, werr)
 	}
@@ -308,8 +320,6 @@ outer:
 			exitCode = exitErr.ExitStatus()
 			err = nil
 		} else if strings.Contains(runErr.Error(), "without exit status") {
-			// Device closed the connection without sending SSH exit-status
-			// (e.g. RouterOS drops the session immediately on /system reboot).
 			exitCode = 0
 			err = nil
 		} else {

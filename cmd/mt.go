@@ -270,7 +270,7 @@ func runMTUpgrade(cmd *cobra.Command, args []string) error {
 		}
 
 		if strings.Contains(checkOut, "available") || strings.Contains(checkOut, "new") {
-			_, _, _, err = c.RunWithInput("/system package update install", []byte("y\n"))
+			_, _, _, err = c.Run("/system package update install")
 			if err != nil && !isConnectionReset(err) {
 				r.ExitCode = 1
 				r.Stderr = fmt.Sprintf("install: %v", err)

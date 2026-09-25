@@ -57,7 +57,7 @@ func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 		Short: "Create a starter hosts.yaml",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := config.NewStore(opts.config)
+			store, err := openStore(opts)
 			if err != nil {
 				return err
 			}

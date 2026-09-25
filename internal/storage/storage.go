@@ -14,15 +14,14 @@ import (
 	"strings"
 )
 
-// ErrNotImplemented is returned for sinks not built yet.
-var ErrNotImplemented = errors.New("not implemented")
-
 // Sink stores a stream under a relative, slash-separated key such as
 // "web/web01/2026-04-03.rsc". Keys are identical across sink types.
 type Sink interface {
 	Write(ctx context.Context, key string, r io.Reader) (int64, error)
 	// Location describes the sink for logs and output.
 	Location() string
+	// Preflight checks the destination is reachable before any device work.
+	Preflight(ctx context.Context) error
 }
 
 // SinkOptions are S3-only settings; local sinks ignore them.
@@ -56,7 +55,7 @@ func NewSink(uri string, opts SinkOptions) (Sink, error) {
 		if u.Host == "" {
 			return nil, fmt.Errorf("invalid storage path %q: want s3://bucket/prefix/", uri)
 		}
-		return nil, fmt.Errorf("s3 storage (%s): %w until the S3 sink lands", uri, ErrNotImplemented)
+		return newS3Sink(uri, opts)
 	}
 	return nil, fmt.Errorf("invalid storage path %q: unsupported scheme %q", uri, u.Scheme)
 }
@@ -77,6 +76,9 @@ type LocalSink struct {
 }
 
 func (s *LocalSink) Location() string { return s.Dir }
+
+// Preflight creates the base directory.
+func (s *LocalSink) Preflight(context.Context) error { return os.MkdirAll(s.Dir, 0o750) }
 
 func (s *LocalSink) Write(ctx context.Context, key string, r io.Reader) (int64, error) {
 	clean, err := CleanKey(key)

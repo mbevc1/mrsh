@@ -12,7 +12,20 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/mbevc1/mrsh/internal/config"
+	"github.com/mbevc1/mrsh/internal/s3client"
 )
+
+// sse returns the global --sse/--kms-key settings.
+func (o *globalOptions) sse() s3client.SSE { return s3client.SSE{Mode: o.sseMode, KMSKey: o.kmsKey} }
+
+// openStore opens the --config source, applying --sse/--kms-key to S3 saves.
+func openStore(opts *globalOptions) (config.ConfigStore, error) {
+	sse := opts.sse()
+	if err := sse.Validate(); err != nil {
+		return nil, err
+	}
+	return config.NewStore(opts.config, config.StoreOptions{SSE: sse})
+}
 
 // loadedConfig is a validated config plus where it came from.
 type loadedConfig struct {
@@ -25,7 +38,7 @@ type loadedConfig struct {
 // the precedence CLI flag > MRSH_DEBUG > hosts.yaml defaults > built-in
 // default to the global options.
 func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) {
-	store, err := config.NewStore(opts.config)
+	store, err := openStore(opts)
 	if err != nil {
 		return nil, err
 	}

@@ -30,7 +30,7 @@ func TestNewStore(t *testing.T) {
 		{"", "error"},
 	}
 	for _, tt := range tests {
-		s, err := NewStore(tt.uri)
+		s, err := NewStore(tt.uri, StoreOptions{})
 		got := "error"
 		switch s := s.(type) {
 		case *LocalStore:
@@ -44,16 +44,6 @@ func TestNewStore(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("NewStore(%q) = %s (err %v), want %s", tt.uri, got, err, tt.want)
 		}
-	}
-}
-
-func TestS3StoreNotImplemented(t *testing.T) {
-	s := &S3Store{Bucket: "b", Key: "k"}
-	if _, _, err := s.Load(context.Background()); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("Load err = %v", err)
-	}
-	if err := s.Save(context.Background(), nil, ""); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("Save err = %v", err)
 	}
 }
 

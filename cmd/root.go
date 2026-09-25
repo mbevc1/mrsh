@@ -34,6 +34,9 @@ type globalOptions struct {
 
 	hostKeyPolicy string
 	knownHosts    string
+
+	sseMode string
+	kmsKey  string
 }
 
 var validOutputs = []string{"text", "json", "csv"}
@@ -111,6 +114,8 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
 	pf.StringVar(&opts.hostKeyPolicy, "host-key-policy", config.HostKeyInsecure, "host key checking: strict|accept-new|insecure")
 	pf.StringVar(&opts.knownHosts, "known-hosts", "~/.ssh/known_hosts", "known_hosts file for strict/accept-new")
+	pf.StringVar(&opts.sseMode, "sse", "", "S3 server-side encryption for writes (config saves, backups): AES256|aws:kms")
+	pf.StringVar(&opts.kmsKey, "kms-key", "", "KMS key ARN for SSE-KMS (implies --sse aws:kms)")
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 

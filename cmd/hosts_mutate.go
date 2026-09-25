@@ -127,7 +127,7 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 			if _, err := f.apply(cmd, opts, &h); err != nil {
 				return err
 			}
-			store, err := config.NewStore(opts.config)
+			store, err := openStore(opts)
 			if err != nil {
 				return err
 			}
@@ -155,7 +155,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := config.NewStore(opts.config)
+			store, err := openStore(opts)
 			if err != nil {
 				return err
 			}
@@ -192,7 +192,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 		Short: "Remove a host entry (asks for confirmation unless --confirm)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := config.NewStore(opts.config)
+			store, err := openStore(opts)
 			if err != nil {
 				return err
 			}

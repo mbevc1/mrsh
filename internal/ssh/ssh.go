@@ -15,12 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
 
-// ErrNotImplemented is returned by features not built yet.
-var ErrNotImplemented = errors.New("not implemented")
+// ErrDisconnected means the session or connection ended without an exit
+// status, as when the remote side reboots.
+var ErrDisconnected = errors.New("session closed without exit status")
 
 // ErrNoAuthMethod means no key, agent or password is available for a host.
 var ErrNoAuthMethod = errors.New("no SSH auth method available (set identity_file, run ssh-agent, or configure pass)")
@@ -51,6 +53,7 @@ type Conn struct {
 	client *gossh.Client
 	addr   string
 	agent  net.Conn
+	sftp   *sftp.Client // opened on first file operation
 }
 
 // Addr returns host:port for c.
@@ -224,8 +227,8 @@ func (c *Conn) Run(ctx context.Context, cmd string, stdin io.Reader) (stdout, st
 	case err == nil:
 	case errors.As(err, &exitErr):
 		exitCode, err = exitErr.ExitStatus(), nil
-	case errors.As(err, &missing):
-		exitCode, err = -1, fmt.Errorf("ssh %s: session closed without exit status", c.addr)
+	case errors.As(err, &missing), errors.Is(err, io.EOF):
+		exitCode, err = -1, fmt.Errorf("ssh %s: %w", c.addr, ErrDisconnected)
 	default:
 		exitCode, err = -1, fmt.Errorf("ssh %s: %w", c.addr, err)
 	}
@@ -233,13 +236,63 @@ func (c *Conn) Run(ctx context.Context, cmd string, stdin io.Reader) (stdout, st
 	return out.String(), errOut.String(), exitCode, err
 }
 
-// Download streams a remote file to w over SFTP. Implemented in Phase 5.
-func (c *Conn) Download(context.Context, string, io.Writer) error {
-	return fmt.Errorf("ssh download: %w", ErrNotImplemented)
+// Download streams the remote file to w over SFTP without buffering it
+// whole, and returns the byte count.
+func (c *Conn) Download(ctx context.Context, remote string, w io.Writer) (int64, error) {
+	sc, err := c.sftpClient()
+	if err != nil {
+		return 0, err
+	}
+	f, err := sc.Open(remote)
+	if err != nil {
+		return 0, fmt.Errorf("sftp %s: open %s: %w", c.addr, remote, err)
+	}
+	defer func() { _ = f.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
+	defer stop()
+
+	start := time.Now()
+	n, err := io.Copy(w, f)
+	if ctx.Err() != nil {
+		return n, fmt.Errorf("sftp %s: %w", c.addr, ctx.Err())
+	}
+	if err != nil {
+		return n, fmt.Errorf("sftp %s: read %s: %w", c.addr, remote, err)
+	}
+	slog.Debug("sftp download", "addr", c.addr, "remote", remote, "bytes", n, "duration", time.Since(start))
+	return n, nil
+}
+
+// Stat returns the size of a remote file over SFTP.
+func (c *Conn) Stat(remote string) (int64, error) {
+	sc, err := c.sftpClient()
+	if err != nil {
+		return 0, err
+	}
+	fi, err := sc.Stat(remote)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+func (c *Conn) sftpClient() (*sftp.Client, error) {
+	if c.sftp != nil {
+		return c.sftp, nil
+	}
+	sc, err := sftp.NewClient(c.client)
+	if err != nil {
+		return nil, fmt.Errorf("sftp %s: %w", c.addr, err)
+	}
+	c.sftp = sc
+	return sc, nil
 }
 
 // Close closes the connection and any agent socket.
 func (c *Conn) Close() error {
+	if c.sftp != nil {
+		_ = c.sftp.Close()
+	}
 	if c.agent != nil {
 		_ = c.agent.Close()
 	}

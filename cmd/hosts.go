@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +45,8 @@ func newHostsCmd(opts *globalOptions) *cobra.Command {
 		Use:   "hosts",
 		Short: "Manage the hosts config",
 	}
-	cmd.AddCommand(newHostsInitCmd(opts), newHostsListCmd(opts))
+	cmd.AddCommand(newHostsInitCmd(opts), newHostsListCmd(opts),
+		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts))
 	return cmd
 }
 
@@ -139,8 +141,16 @@ func writeHostRows(w io.Writer, format string, rows []hostRow) error {
 				r.Name, r.Host, strconv.Itoa(r.Port), dash(r.Group), dash(r.User), dash(r.Pass), dash(r.IdentityFile))
 		}
 		return tw.Flush()
+	case "csv":
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"name", "host", "port", "group", "user", "pass", "identity_file"})
+		for _, r := range rows {
+			_ = cw.Write([]string{r.Name, r.Host, strconv.Itoa(r.Port), r.Group, r.User, r.Pass, r.IdentityFile})
+		}
+		cw.Flush()
+		return cw.Error()
 	}
-	return fmt.Errorf("hosts list does not support --output %s yet", format)
+	return fmt.Errorf("unknown output format %q", format)
 }
 
 func dash(s string) string {

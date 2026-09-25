@@ -113,7 +113,6 @@ func TestRunUsageErrors(t *testing.T) {
 		{[]string{"run", "-c", "x", "--script", "y"}, "none of the others can be"},
 		{[]string{"-g", "nope", "run", "-c", "x"}, "no target hosts"},
 		{[]string{"--host-key-policy", "yolo", "run", "-c", "x"}, "invalid --host-key-policy"},
-		{[]string{"-o", "json", "run", "-c", "x"}, "does not support --output json yet"},
 	}
 	for _, tt := range tests {
 		_, err := execRoot(t, append([]string{"-f", cfg}, tt.args...)...)

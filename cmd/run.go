@@ -38,9 +38,6 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if opts.output != "text" {
-				return fmt.Errorf("run does not support --output %s yet", opts.output)
-			}
 			targets, err := runner.Targets(lc.cfg, runner.TargetOptions{
 				Group: opts.group, Hosts: opts.hosts, User: opts.user, IdentityFile: opts.identityFile,
 			})
@@ -67,7 +64,7 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 				HostKeys: &ssh.HostKeyChecker{},
 				Policy:   opts.hostKeyPolicy,
 			}))
-			if err := runner.WriteText(out, results); err != nil {
+			if err := runner.Write(out, opts.output, results); err != nil {
 				return err
 			}
 			if ctx.Err() != nil {

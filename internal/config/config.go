@@ -59,8 +59,8 @@ type Defaults struct {
 
 // Host is one inventory entry.
 type Host struct {
-	Host         string `yaml:"host" json:"host"`
 	Name         string `yaml:"name" json:"name"`
+	Host         string `yaml:"host" json:"host"`
 	Group        string `yaml:"group,omitempty" json:"group,omitempty"`
 	Port         int    `yaml:"port,omitempty" json:"port,omitempty"`
 	Credentials  `yaml:",inline"`

@@ -13,6 +13,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
 header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { font-weight: 650; font-size: 16px; }
@@ -26,6 +27,10 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; bord
 main { padding: 16px 20px 40px; }
 button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); padding: 6px 14px; border-radius: 6px; cursor: pointer; }
 button.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+button.ghost.danger { color: var(--danger); }
+.stopped { max-width: 520px; margin: 80px auto; text-align: center; }
+.stopped h1 { font-size: 20px; margin: 0 0 8px; }
+.stopped p { color: var(--muted); }
 button.link { background: none; border: 0; color: var(--accent); padding: 2px 6px; }
 button.link.danger { color: var(--danger); }
 input, select, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }

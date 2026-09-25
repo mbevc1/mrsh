@@ -12,6 +12,7 @@
   <div class="brand">mrsh <span>config</span></div>
   <div class="where" id="location"></div>
   <button id="reload" type="button" class="ghost">Reload</button>
+  <button id="exit" type="button" class="ghost danger" title="Stop mrsh ui and close this tab">Exit</button>
 </header>
 <div id="banner" class="banner" hidden></div>
 <nav class="tabs" role="tablist">
@@ -19,6 +20,10 @@
   <button type="button" role="tab" data-tab="defaults">Defaults</button>
   <button type="button" role="tab" data-tab="commands">Commands</button>
 </nav>
+<section id="stopped" class="stopped" hidden>
+  <h1>mrsh ui has stopped</h1>
+  <p>You can close this tab. Run <code>mrsh ui</code> again to keep editing.</p>
+</section>
 <main>
   <section id="tab-hosts">
     <div class="toolbar">

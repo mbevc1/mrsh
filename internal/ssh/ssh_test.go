@@ -295,3 +295,48 @@ func shortTempDir(t *testing.T) string {
 	t.Cleanup(func() { _ = os.RemoveAll(d) })
 	return d
 }
+
+func TestDownloadAndStat(t *testing.T) {
+	root := t.TempDir()
+	payload := strings.Repeat("0123456789", 100_000) // 1 MB
+	if err := os.WriteFile(filepath.Join(root, "backup-Mon.backup"), []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := sshtest.Start(t, sshtest.Options{Password: "pw", SFTPRoot: root})
+	cfg := baseConfig(srv)
+	cfg.Pass = "pw"
+	c, err := Dial(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	size, err := c.Stat("backup-Mon.backup")
+	if err != nil || size != int64(len(payload)) {
+		t.Fatalf("Stat = %d, %v", size, err)
+	}
+	var buf strings.Builder
+	n, err := c.Download(context.Background(), "backup-Mon.backup", &buf)
+	if err != nil || n != int64(len(payload)) || buf.String() != payload {
+		t.Fatalf("Download n=%d err=%v match=%v", n, err, buf.String() == payload)
+	}
+	if _, err := c.Download(context.Background(), "missing.rsc", &buf); err == nil {
+		t.Error("missing file downloaded")
+	}
+	// Run still works on the same connection after SFTP use.
+	if out, _, _, err := c.Run(context.Background(), "echo still", nil); err != nil || out != "still\n" {
+		t.Errorf("run after sftp: %q %v", out, err)
+	}
+}
+
+func TestDroppedSessionIsDisconnected(t *testing.T) {
+	srv := sshtest.Start(t, sshtest.Options{Password: "pw", Exec: func(string) sshtest.Reply {
+		return sshtest.Reply{Stdout: "Rebooting...\n", Drop: true}
+	}})
+	cfg := baseConfig(srv)
+	cfg.Pass = "pw"
+	_, _, code, err := dialRun(t, cfg, "/system reboot")
+	if !errors.Is(err, ErrDisconnected) || code != -1 {
+		t.Errorf("code=%d err=%v", code, err)
+	}
+}

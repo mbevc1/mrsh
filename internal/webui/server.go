@@ -144,6 +144,9 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
+		// Page files must be revalidated so a new mrsh build never runs
+		// with a stale app.js cached from an earlier session.
+		h.Set("Cache-Control", "no-cache")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			h.Set("Cache-Control", "no-store")
 			if subtle.ConstantTimeCompare([]byte(r.Header.Get(TokenHeader)), []byte(s.Token)) != 1 {

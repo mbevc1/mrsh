@@ -127,6 +127,9 @@ func TestStaticPageAndHeaders(t *testing.T) {
 		if w.Code != 200 || w.Body.Len() == 0 {
 			t.Errorf("%s: %d", p, w.Code)
 		}
+		if w.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: Cache-Control = %q, want no-cache so upgrades never run a stale app.js", p, w.Header().Get("Cache-Control"))
+		}
 		if !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") || w.Header().Get("X-Frame-Options") != "DENY" {
 			t.Errorf("%s: security headers missing: %v", p, w.Header())
 		}

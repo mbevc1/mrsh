@@ -37,11 +37,45 @@ async function api(method, path, body) {
   return data;
 }
 
-function banner(msg, kind = "warn") {
+// banner shows a lasting warning or error; toast confirms a finished action.
+function banner(msg) {
   const b = $("#banner");
   b.textContent = msg || "";
   b.hidden = !msg;
-  b.classList.toggle("ok", kind === "ok");
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  t.classList.remove("show");
+  void t.offsetWidth; // restart the fade-in when toasts follow each other
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2500);
+}
+
+const clock = () => new Date().toLocaleTimeString();
+
+// busy disables btn and shows label while fn runs. On loopback most calls
+// finish in a few milliseconds, so the state stays up for at least 300 ms
+// to be noticeable.
+async function busy(btn, label, fn) {
+  const text = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = label;
+  btn.setAttribute("aria-busy", "true");
+  const started = performance.now();
+  try {
+    return await fn();
+  } finally {
+    const wait = 300 - (performance.now() - started);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    btn.disabled = false;
+    btn.textContent = text;
+    btn.removeAttribute("aria-busy");
+  }
 }
 
 function showErrors(list, err) {
@@ -54,17 +88,27 @@ function showErrors(list, err) {
   }
 }
 
+// load fetches the config and renders it; it reports whether that worked.
 async function load() {
   try {
     state.cfg = await api("GET", "/api/config");
     state.version = state.cfg.version;
     banner("");
     render();
+    return true;
   } catch (err) {
     banner(err.status === 401
       ? "This page has no valid session token. Open the URL printed by `mrsh ui` in your terminal."
       : `Could not load config: ${err.message}`);
+    return false;
   }
+}
+
+// reload says whether anything changed, so an unchanged reload is still visible.
+async function reload() {
+  const before = state.version;
+  const ok = await busy($("#reload"), "Reloading…", load);
+  if (ok) toast(state.version === before ? `Reloaded at ${clock()}: no changes` : `Reloaded at ${clock()}: config changed`);
 }
 
 // On a version conflict, reload and tell the user what happened.
@@ -137,7 +181,7 @@ function renderHosts() {
     edit.addEventListener("click", () => openEditor(h));
     const del = document.createElement("button");
     del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
-    del.addEventListener("click", () => removeHost(h));
+    del.addEventListener("click", () => removeHost(h, del));
     actions.append(edit, del);
     tr.append(actions);
     tbody.append(tr);
@@ -217,25 +261,32 @@ function liveValidate() {
 async function saveHost(ev) {
   ev.preventDefault();
   const host = readHost();
-  try {
-    if (state.editing) await api("PUT", `/api/hosts/${encodeURIComponent(state.editing)}`, host);
-    else await api("POST", "/api/hosts", host);
-    $("#editor").close();
-    await load();
-  } catch (err) {
-    if (await onConflict(err)) { $("#editor").close(); return; }
-    showErrors($("#host-errors"), err);
-  }
+  const editing = state.editing;
+  await busy($("#save"), "Saving…", async () => {
+    try {
+      if (editing) await api("PUT", `/api/hosts/${encodeURIComponent(editing)}`, host);
+      else await api("POST", "/api/hosts", host);
+      $("#editor").close();
+      await load();
+      toast(editing ? `Saved ${host.name}` : `Added ${host.name}`);
+    } catch (err) {
+      if (await onConflict(err)) { $("#editor").close(); return; }
+      showErrors($("#host-errors"), err);
+    }
+  });
 }
 
-async function removeHost(h) {
+async function removeHost(h, btn) {
   if (!confirm(`Remove host ${h.name} (${h.host})?`)) return;
-  try {
-    await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}`);
-    await load();
-  } catch (err) {
-    if (!(await onConflict(err))) banner(`Could not remove ${h.name}: ${err.message}`);
-  }
+  await busy(btn, "Removing…", async () => {
+    try {
+      await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}`);
+      await load();
+      toast(`Removed ${h.name}`);
+    } catch (err) {
+      if (!(await onConflict(err))) banner(`Could not remove ${h.name}: ${err.message}`);
+    }
+  });
 }
 
 function renderDefaults() {
@@ -256,27 +307,31 @@ async function saveDefaults(ev) {
     identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(),
     user: readSecret($('#defaults-form [data-secret="user"]')), pass: readSecret($('#defaults-form [data-secret="pass"]')),
   };
-  try {
-    await api("PUT", "/api/defaults", body);
-    $("#defaults-errors").replaceChildren();
-    await load();
-    banner("Defaults saved.", "ok");
-  } catch (err) {
-    if (!(await onConflict(err))) showErrors($("#defaults-errors"), err);
-  }
+  await busy(ev.submitter || $("#defaults-form button[type=submit]"), "Saving…", async () => {
+    try {
+      await api("PUT", "/api/defaults", body);
+      $("#defaults-errors").replaceChildren();
+      await load();
+      toast("Defaults saved");
+    } catch (err) {
+      if (!(await onConflict(err))) showErrors($("#defaults-errors"), err);
+    }
+  });
 }
 
 async function saveCommands(ev) {
   ev.preventDefault();
   const cmds = $("#commands").value.split("\n").map((s) => s.trim()).filter(Boolean);
-  try {
-    await api("PUT", "/api/commands", cmds);
-    $("#commands-errors").replaceChildren();
-    await load();
-    banner("Commands saved.", "ok");
-  } catch (err) {
-    if (!(await onConflict(err))) showErrors($("#commands-errors"), err);
-  }
+  await busy(ev.submitter || $("#commands-form button[type=submit]"), "Saving…", async () => {
+    try {
+      await api("PUT", "/api/commands", cmds);
+      $("#commands-errors").replaceChildren();
+      await load();
+      toast(`Commands saved (${cmds.length})`);
+    } catch (err) {
+      if (!(await onConflict(err))) showErrors($("#commands-errors"), err);
+    }
+  });
 }
 
 function selectTab(name) {
@@ -292,7 +347,7 @@ let heartbeatTimer;
 // (The host editor is modal, so Exit can't be clicked mid-edit.)
 async function exitUI() {
   try {
-    await api("POST", "/api/shutdown", {});
+    await busy($("#exit"), "Exiting…", () => api("POST", "/api/shutdown", {}));
   } catch (err) {
     banner(`Could not stop mrsh ui: ${err.message}`);
     return;
@@ -328,7 +383,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#host-form").addEventListener("input", liveValidate);
   $("#defaults-form").addEventListener("submit", saveDefaults);
   $("#commands-form").addEventListener("submit", saveCommands);
-  $("#reload").addEventListener("click", load);
+  $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
   load();
   heartbeatTimer = setInterval(heartbeat, 5000);

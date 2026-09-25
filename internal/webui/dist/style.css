@@ -20,13 +20,19 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; bord
 .brand span { color: var(--muted); font-weight: 400; }
 .where { color: var(--muted); font-family: var(--mono); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); }
-.banner.ok { background: var(--ok-bg); color: var(--ok-text); }
 .tabs { display: flex; gap: 4px; padding: 12px 20px 0; }
 .tabs button { background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
 main { padding: 16px 20px 40px; }
 button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); padding: 6px 14px; border-radius: 6px; cursor: pointer; }
 button.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+button:disabled { opacity: 0.6; cursor: progress; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10;
+  background: var(--ok-bg); color: var(--ok-text); border: 1px solid var(--line);
+  padding: 8px 16px; border-radius: var(--radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); }
+.toast.show { animation: toast-in 150ms ease-out; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) { .toast.show { animation: none; } }
 button.ghost.danger { color: var(--danger); }
 .stopped { max-width: 520px; margin: 80px auto; text-align: center; }
 .stopped h1 { font-size: 20px; margin: 0 0 8px; }

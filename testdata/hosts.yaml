@@ -1,0 +1,39 @@
+defaults:
+  user: deploy
+  port: 22
+  timeout: 30
+  identity_file: ~/.ssh/id_rsa
+  parallel: 5
+  output: text
+  debug: false
+  host_key_policy: insecure
+
+commands:
+  - uptime
+  - df -h
+
+hosts:
+  - host: '10.0.0.1'
+    name: 'web01'
+    group: 'web'
+    port: 22
+    user: deploy
+    identity_file: ~/.ssh/web_key
+    pass_env: WEB01_PASS
+
+  - host: '10.0.0.2'
+    name: 'web02'
+    group: 'web'
+    pass: 'literalsecret'
+
+  - host: '10.0.0.10'
+    name: 'db01'
+    group: 'db'
+    user_arn: 'arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#user'
+    pass_arn: 'arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#pass'
+
+  - host: '10.0.0.11'
+    name: 'db02'
+    group: 'db'
+    port: 2222
+    pass_arn: 'arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/db02/pass'

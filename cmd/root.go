@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -36,6 +37,12 @@ func Execute() {
 }
 
 func newRootCmd() *cobra.Command {
+	root, _ := newRootCmdWithOptions()
+	return root
+}
+
+// newRootCmdWithOptions also returns the options the flags bind to, for tests.
+func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	opts := &globalOptions{}
 
 	root := &cobra.Command{
@@ -68,8 +75,8 @@ func newRootCmd() *cobra.Command {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	root.AddCommand(newVersionCmd(opts))
-	return root
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts))
+	return root, opts
 }
 
 // flagAliases maps alternate flag spellings to their canonical name.
@@ -92,12 +99,10 @@ func setupLogging(w io.Writer, debug bool) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
 }
 
+// envDebug parses MRSH_DEBUG the same way viper does (strconv.ParseBool).
 func envDebug() bool {
-	switch strings.ToLower(os.Getenv("MRSH_DEBUG")) {
-	case "1", "true", "yes":
-		return true
-	}
-	return false
+	v, _ := strconv.ParseBool(os.Getenv("MRSH_DEBUG"))
+	return v
 }
 
 func validateOutput(o string) error {

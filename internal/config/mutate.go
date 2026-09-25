@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -190,5 +191,112 @@ func Mutate(ctx context.Context, store ConfigStore, fn func(*Document, *Config) 
 			continue
 		}
 		return err
+	}
+}
+
+// MutateAt is Mutate pinned to the version the caller last saw (such as a
+// UI tab): if the stored config moved on, it returns ErrVersionConflict
+// instead of reapplying, so the caller can show the newer state first.
+// It returns the new version.
+func MutateAt(ctx context.Context, store ConfigStore, version string, fn func(*Document, *Config) error) (string, error) {
+	raw, current, err := store.Load(ctx)
+	if err != nil {
+		return "", fmt.Errorf("load config %s: %w", store.Location(), err)
+	}
+	if current != version {
+		return "", ErrVersionConflict
+	}
+	doc, cfg, err := ParseDocument(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", store.Location(), err)
+	}
+	if err := fn(doc, cfg); err != nil {
+		return "", err
+	}
+	out, err := doc.Bytes()
+	if err != nil {
+		return "", err
+	}
+	updated, err := Parse(out)
+	if err != nil {
+		return "", fmt.Errorf("re-parse mutated config: %w", err)
+	}
+	if err := updated.Validate(); err != nil {
+		return "", &ValidationError{Err: err}
+	}
+	if err := store.Save(ctx, out, version); err != nil {
+		return "", err
+	}
+	_, next, err := store.Load(ctx)
+	return next, err
+}
+
+// ValidationError wraps a rejected change's validation problems.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return "change rejected:\n" + e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+// Problems lists the individual validation messages.
+func (e *ValidationError) Problems() []string { return Problems(e.Err) }
+
+// Problems splits a joined validation error into its messages.
+func Problems(err error) []string {
+	var out []string
+	for _, line := range strings.Split(err.Error(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// SetDefaults replaces the defaults block.
+func (d *Document) SetDefaults(def Defaults) error {
+	var n yaml.Node
+	if err := n.Encode(def); err != nil {
+		return err
+	}
+	return d.setTop("defaults", &n, 0)
+}
+
+// SetCommands replaces the commands list (removing it when empty).
+func (d *Document) SetCommands(cmds []string) error {
+	if len(cmds) == 0 {
+		d.deleteTop("commands")
+		return nil
+	}
+	var n yaml.Node
+	if err := n.Encode(cmds); err != nil {
+		return err
+	}
+	return d.setTop("commands", &n, 1)
+}
+
+// setTop replaces a top-level value, keeping its comments, or inserts it
+// at position pos.
+func (d *Document) setTop(key string, n *yaml.Node, pos int) error {
+	m := d.root.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			old := m.Content[i+1]
+			n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			m.Content[i+1] = n
+			return nil
+		}
+	}
+	k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
+	at := min(pos*2, len(m.Content))
+	m.Content = append(m.Content[:at], append([]*yaml.Node{k, n}, m.Content[at:]...)...)
+	return nil
+}
+
+func (d *Document) deleteTop(key string) {
+	m := d.root.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
 	}
 }

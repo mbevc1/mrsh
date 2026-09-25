@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mrsh config</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand">mrsh <span>config</span></div>
+  <div class="where" id="location"></div>
+  <button id="reload" type="button" class="ghost">Reload</button>
+</header>
+<div id="banner" class="banner" hidden></div>
+<nav class="tabs" role="tablist">
+  <button type="button" role="tab" data-tab="hosts" aria-selected="true">Hosts</button>
+  <button type="button" role="tab" data-tab="defaults">Defaults</button>
+  <button type="button" role="tab" data-tab="commands">Commands</button>
+</nav>
+<main>
+  <section id="tab-hosts">
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search name, host or group" aria-label="Search hosts">
+      <select id="group-filter" aria-label="Filter by group"><option value="">All groups</option></select>
+      <span class="count" id="count"></span>
+      <button id="add" type="button">Add host</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th></th></tr></thead>
+        <tbody id="hosts"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="empty" hidden>No hosts yet. Add one, or run <code>mrsh hosts add</code>.</p>
+  </section>
+
+  <section id="tab-defaults" hidden>
+    <form id="defaults-form" class="grid-form">
+      <label>Port <input name="port" type="number" min="0" max="65535"></label>
+      <label>Timeout (s) <input name="timeout" type="number" min="0"></label>
+      <label>Parallel <input name="parallel" type="number" min="0"></label>
+      <label>Output
+        <select name="output"><option value="">(built-in)</option><option>text</option><option>json</option><option>csv</option></select>
+      </label>
+      <label>Host key policy
+        <select name="host_key_policy"><option value="">(built-in: insecure)</option><option>strict</option><option>accept-new</option><option>insecure</option></select>
+      </label>
+      <label class="wide">Identity file <input name="identity_file" placeholder="~/.ssh/id_ed25519"></label>
+      <label class="wide">known_hosts <input name="known_hosts" placeholder="~/.ssh/known_hosts"></label>
+      <label class="check"><input name="debug" type="checkbox"> Debug logging</label>
+      <fieldset class="wide secret" data-secret="user"></fieldset>
+      <fieldset class="wide secret" data-secret="pass"></fieldset>
+      <ul class="errors wide" id="defaults-errors"></ul>
+      <div class="actions wide"><button type="submit">Save defaults</button></div>
+    </form>
+  </section>
+
+  <section id="tab-commands" hidden>
+    <p class="hint">Commands run by <code>mrsh run</code> when no <code>-c</code> or <code>--script</code> is given, one per line.</p>
+    <form id="commands-form">
+      <textarea id="commands" rows="10" spellcheck="false"></textarea>
+      <ul class="errors" id="commands-errors"></ul>
+      <div class="actions"><button type="submit">Save commands</button></div>
+    </form>
+  </section>
+</main>
+
+<dialog id="editor">
+  <form id="host-form" class="grid-form" method="dialog">
+    <h2 id="editor-title">Add host</h2>
+    <label>Name <input name="name" required autocomplete="off"></label>
+    <label>Host <input name="host" required autocomplete="off" placeholder="10.0.0.1 or router.lan"></label>
+    <label>Group <input name="group" list="groups" autocomplete="off"></label>
+    <label>Port <input name="port" type="number" min="0" max="65535" placeholder="default"></label>
+    <label class="wide">Identity file <input name="identity_file" placeholder="default"></label>
+    <label class="wide">known_hosts <input name="known_hosts" placeholder="default"></label>
+    <fieldset class="wide secret" data-secret="user"></fieldset>
+    <fieldset class="wide secret" data-secret="pass"></fieldset>
+    <ul class="errors wide" id="host-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="cancel">Cancel</button>
+      <button type="submit" id="save">Save</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="groups"></datalist>
+
+<template id="secret-template">
+  <legend></legend>
+  <div class="secret-row">
+    <select class="kind" aria-label="Source">
+      <option value="unset">Not set</option>
+      <option value="plain">Literal</option>
+      <option value="env">Environment variable</option>
+      <option value="arn">AWS ARN (SSM / Secrets Manager)</option>
+    </select>
+    <input class="value" autocomplete="off" spellcheck="false">
+  </div>
+  <small class="secret-hint"></small>
+</template>
+</body>
+</html>

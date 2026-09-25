@@ -46,6 +46,9 @@ func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) 
 	if err := applyDefaults(cmd, opts, raw); err != nil {
 		return nil, err
 	}
+	// The resolved flag-or-defaults value becomes the default every host
+	// inherits; a per-host known_hosts still wins.
+	cfg.Defaults.KnownHosts = opts.knownHosts
 	slog.Debug("config loaded", "path", store.Location(), "source", sourceKind(opts.config),
 		"hosts", len(cfg.Hosts), "parallel", opts.parallel, "timeout", opts.timeout, "output", opts.output)
 	return &loadedConfig{cfg: cfg, store: store, version: version}, nil
@@ -57,6 +60,9 @@ var defaultBindings = map[string]string{
 	"defaults.timeout":  "timeout",
 	"defaults.output":   "output",
 	"defaults.debug":    "debug",
+
+	"defaults.host_key_policy": "host-key-policy",
+	"defaults.known_hosts":     "known-hosts",
 }
 
 // applyDefaults resolves the flag-or-config settings through viper. Viper
@@ -80,6 +86,8 @@ func applyDefaults(cmd *cobra.Command, opts *globalOptions, raw []byte) error {
 	opts.parallel = v.GetInt("defaults.parallel")
 	opts.timeout = v.GetInt("defaults.timeout")
 	opts.output = v.GetString("defaults.output")
+	opts.hostKeyPolicy = v.GetString("defaults.host_key_policy")
+	opts.knownHosts = v.GetString("defaults.known_hosts")
 	debug := v.GetBool("defaults.debug")
 	if debug != opts.debug {
 		opts.debug = debug
@@ -90,6 +98,11 @@ func applyDefaults(cmd *cobra.Command, opts *globalOptions, raw []byte) error {
 	}
 	if opts.timeout < 1 {
 		return fmt.Errorf("timeout must be at least 1 second, got %d", opts.timeout)
+	}
+	switch opts.hostKeyPolicy {
+	case config.HostKeyStrict, config.HostKeyAcceptNew, config.HostKeyInsecure:
+	default:
+		return fmt.Errorf("invalid --host-key-policy %q: must be strict, accept-new or insecure", opts.hostKeyPolicy)
 	}
 	return validateOutput(opts.output)
 }

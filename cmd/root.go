@@ -2,15 +2,21 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/mbevc1/mrsh/internal/config"
 )
 
 // globalOptions holds the persistent flags shared by every subcommand.
@@ -25,15 +31,46 @@ type globalOptions struct {
 	output       string
 	dryRun       bool
 	debug        bool
+
+	hostKeyPolicy string
+	knownHosts    string
 }
 
 var validOutputs = []string{"text", "json", "csv"}
 
-// Execute runs the root command and exits non-zero on error.
+// Exit codes: 0 all hosts ok, 1 any host failed, 2 usage or config error.
+const (
+	exitHostFailed  = 1
+	exitUsage       = 2
+	exitInterrupted = 130 // 128 + SIGINT, the shell convention
+)
+
+// exitCodeError carries a specific process exit code out of a command.
+type exitCodeError struct {
+	code int
+	msg  string
+}
+
+func (e *exitCodeError) Error() string { return e.msg }
+
+// Execute runs the root command and exits non-zero on error. SIGINT and
+// SIGTERM cancel the context, which kills in-flight remote commands.
 func Execute() {
-	if err := newRootCmd().Execute(); err != nil {
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := newRootCmd().ExecuteContext(ctx)
+	stop()
+	os.Exit(exitCode(err))
+}
+
+func exitCode(err error) int {
+	var ec *exitCodeError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &ec):
+		return ec.code
 	}
+	return exitUsage
 }
 
 func newRootCmd() *cobra.Command {
@@ -72,10 +109,12 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.StringVarP(&opts.output, "output", "o", "text", "output format: "+strings.Join(validOutputs, "|"))
 	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run without executing")
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
+	pf.StringVar(&opts.hostKeyPolicy, "host-key-policy", config.HostKeyInsecure, "host key checking: strict|accept-new|insecure")
+	pf.StringVar(&opts.knownHosts, "known-hosts", "~/.ssh/known_hosts", "known_hosts file for strict/accept-new")
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts))
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts))
 	return root, opts
 }
 

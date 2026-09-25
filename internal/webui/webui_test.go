@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mbevc1/mrsh/internal/config"
 )
@@ -374,4 +375,64 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestShutdownEndpoint(t *testing.T) {
+	f := newFixture(t)
+	if w, _ := f.do("POST", "/api/shutdown", "{}", header(TokenHeader, "")); w.Code != 401 {
+		t.Errorf("no token: %d", w.Code)
+	}
+	if w, _ := f.do("POST", "/api/shutdown", "x", header("Content-Type", "text/plain")); w.Code != 415 {
+		t.Errorf("text/plain: %d", w.Code)
+	}
+	select {
+	case <-f.srv.quitChan():
+		t.Fatal("rejected requests triggered shutdown")
+	default:
+	}
+	w, out := f.do("POST", "/api/shutdown", "{}")
+	if w.Code != 200 || out["ok"] != true {
+		t.Fatalf("shutdown: %d %v", w.Code, out)
+	}
+	select {
+	case <-f.srv.quitChan():
+	default:
+		t.Fatal("quit channel not closed")
+	}
+	// A second request is harmless.
+	if w, _ := f.do("POST", "/api/shutdown", "{}"); w.Code != 200 {
+		t.Errorf("second shutdown: %d", w.Code)
+	}
+}
+
+func TestServeStopsOnShutdownRequest(t *testing.T) {
+	store := &config.LocalStore{Path: filepath.Join(t.TempDir(), "h.yaml")}
+	_ = store.Save(context.Background(), []byte("hosts: []\n"), "")
+	srv, ln, err := Listen(store, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(context.Background(), ln) }()
+
+	req, _ := http.NewRequest("POST", "http://"+ln.Addr().String()+"/api/shutdown", strings.NewReader("{}"))
+	req.Header.Set(TokenHeader, srv.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"ok":true`) {
+		t.Fatalf("reply: %d %s", resp.StatusCode, body)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after shutdown request")
+	}
 }

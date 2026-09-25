@@ -33,7 +33,7 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 		Short: "Edit the hosts config in a local browser UI",
 		Long: "Starts a loopback-only web editor for the --config source (local or s3://) and opens it.\n" +
 			"It edits config only: it never resolves secrets, connects to hosts or runs commands.\n" +
-			"Stop it with Ctrl-C; nothing keeps running afterwards.",
+			"Stop it with Ctrl-C or the page's Exit button; nothing keeps running afterwards.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openStore(opts)
@@ -49,13 +49,17 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			url := srv.URL()
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "mrsh ui editing %s\nopen %s\npress Ctrl-C to stop\n", store.Location(), url)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "mrsh ui editing %s\nopen %s\npress Ctrl-C or the Exit button to stop\n", store.Location(), url)
 			if !noOpen {
 				if err := openBrowser(url); err != nil {
 					slog.Warn("could not open a browser; open the URL above yourself", "err", err)
 				}
 			}
-			return srv.Serve(cmd.Context(), ln)
+			if err := srv.Serve(cmd.Context(), ln); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "mrsh ui stopped")
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:7171", "listen address (loopback only)")

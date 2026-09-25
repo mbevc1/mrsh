@@ -284,6 +284,27 @@ function selectTab(name) {
   for (const t of ["hosts", "defaults", "commands"]) $(`#tab-${t}`).hidden = t !== name;
 }
 
+let heartbeatTimer;
+
+// Exit stops the mrsh ui process, then tries to close the tab. Browsers only
+// let scripts close tabs they opened, so a tab opened from the terminal
+// shows a "stopped" page instead.
+// (The host editor is modal, so Exit can't be clicked mid-edit.)
+async function exitUI() {
+  try {
+    await api("POST", "/api/shutdown", {});
+  } catch (err) {
+    banner(`Could not stop mrsh ui: ${err.message}`);
+    return;
+  }
+  clearInterval(heartbeatTimer);
+  sessionStorage.removeItem("mrsh-token");
+  window.close();
+  for (const el of ["header", "nav.tabs", "main", "#banner"]) $(el).hidden = true;
+  $("#stopped").hidden = false;
+  document.title = "mrsh ui stopped";
+}
+
 // Tell the user when the mrsh ui process has stopped.
 async function heartbeat() {
   try {
@@ -308,6 +329,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#defaults-form").addEventListener("submit", saveDefaults);
   $("#commands-form").addEventListener("submit", saveCommands);
   $("#reload").addEventListener("click", load);
+  $("#exit").addEventListener("click", exitUI);
   load();
-  setInterval(heartbeat, 5000);
+  heartbeatTimer = setInterval(heartbeat, 5000);
 });

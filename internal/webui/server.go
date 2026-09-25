@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mbevc1/mrsh/internal/config"
@@ -38,7 +39,24 @@ type Server struct {
 	Store config.ConfigStore
 	Token string
 	addr  string // host:port actually bound
+
+	quitMu   sync.Mutex
+	quit     chan struct{} // closed when the page asks the server to exit
+	quitOnce sync.Once
 }
+
+// quitChan returns the exit channel, creating it on first use.
+func (s *Server) quitChan() chan struct{} {
+	s.quitMu.Lock()
+	defer s.quitMu.Unlock()
+	if s.quit == nil {
+		s.quit = make(chan struct{})
+	}
+	return s.quit
+}
+
+// requestQuit asks Serve to shut down; later calls do nothing.
+func (s *Server) requestQuit() { s.quitOnce.Do(func() { close(s.quitChan()) }) }
 
 // CheckLoopback rejects listen addresses that are not loopback.
 func CheckLoopback(addr string) error {
@@ -75,7 +93,8 @@ func Listen(store config.ConfigStore, addr string) (*Server, net.Listener, error
 // URL is the address to open; the page moves the token out of the URL on load.
 func (s *Server) URL() string { return "http://" + s.addr + "/#token=" + s.Token }
 
-// Serve runs until ctx ends, then shuts down.
+// Serve runs until ctx ends or the page requests exit, then shuts down
+// gracefully (in-flight replies, such as the exit request's, are sent).
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	hs := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
@@ -84,10 +103,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return hs.Shutdown(shutdownCtx)
+	case <-s.quitChan():
+		slog.Debug("ui exit requested from the page")
 	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return hs.Shutdown(shutdownCtx)
 }
 
 // Handler returns the full handler: static page plus guarded API.

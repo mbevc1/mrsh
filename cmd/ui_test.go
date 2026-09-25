@@ -92,3 +92,42 @@ func TestUIRefusesNonLoopbackAndMissingConfig(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestUIExitButtonEndsCommand(t *testing.T) {
+	cfg := writeConfig(t, "hosts: []\n")
+	opened := make(chan string, 1)
+	old := openBrowser
+	openBrowser = func(u string) error { opened <- u; return nil }
+	t.Cleanup(func() { openBrowser = old })
+
+	root := newRootCmd()
+	var out syncBuffer
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"-f", cfg, "ui", "--addr", "127.0.0.1:0"})
+	done := make(chan error, 1)
+	go func() { done <- root.ExecuteContext(context.Background()) }()
+
+	url := <-opened
+	m := regexp.MustCompile(`^http://([^/]+)/#token=([0-9a-f]+)$`).FindStringSubmatch(url)
+	req, _ := http.NewRequest("POST", "http://"+m[1]+"/api/shutdown", strings.NewReader("{}"))
+	req.Header.Set(webui.TokenHeader, m[2])
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	select {
+	case err := <-done:
+		if err != nil || exitCode(err) != 0 {
+			t.Errorf("exit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("mrsh ui kept running after the exit request")
+	}
+	if !strings.Contains(out.String(), "mrsh ui stopped") {
+		t.Errorf("output:\n%s", out.String())
+	}
+}

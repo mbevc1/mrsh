@@ -158,6 +158,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
+	// Exit: reply first, then stop the server (Serve shuts down gracefully,
+	// so this reply is delivered). The guard makes it token + JSON only.
+	mux.HandleFunc("POST /api/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		s.requestQuit()
+	})
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("POST /api/validate", s.validate)
 	mux.HandleFunc("POST /api/hosts", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {

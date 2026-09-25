@@ -141,13 +141,17 @@ func TestGetConfigNeverLeaksSecrets(t *testing.T) {
 	f := newFixture(t)
 	w, out := f.do("GET", "/api/config", "")
 	body := w.Body.String()
-	for _, secret := range []string{"s3cret-literal", "admin", "resolved-env-secret"} {
+	for _, secret := range []string{"s3cret-literal", "resolved-env-secret"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("GET /api/config leaks %q:\n%s", secret, body)
 		}
 	}
 	hosts := out["hosts"].([]any)
 	web := hosts[0].(map[string]any)
+	// Usernames are shown; passwords are not.
+	if user := web["user"].(map[string]any); user["kind"] != "plain" || user["value"] != "admin" {
+		t.Errorf("literal user view = %v", user)
+	}
 	if pass := web["pass"].(map[string]any); pass["kind"] != "plain" || pass["set"] != true || pass["value"] != "" {
 		t.Errorf("literal pass view = %v", pass)
 	}
@@ -233,7 +237,7 @@ func TestUpdateKeepsLiteralAndRenames(t *testing.T) {
 	v := f.version()
 	// kind plain with an empty value keeps the stored literal; group changes.
 	w, res := f.do("PUT", "/api/hosts/web01",
-		`{"name":"web01","host":"10.0.0.1","group":"edge","user":{"kind":"plain","value":""},"pass":{"kind":"plain","value":""}}`,
+		`{"name":"web01","host":"10.0.0.1","group":"edge","user":{"kind":"plain","value":"admin"},"pass":{"kind":"plain","value":""}}`,
 		header("If-Match", v))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body)
@@ -241,6 +245,14 @@ func TestUpdateKeepsLiteralAndRenames(t *testing.T) {
 	h := f.config().Hosts[0]
 	if h.Pass != "s3cret-literal" || h.User != "admin" || h.Group != "edge" {
 		t.Errorf("host = %+v", h)
+	}
+
+	// A username emptied in the editor is rejected rather than silently kept.
+	w, _ = f.do("PUT", "/api/hosts/web01",
+		`{"name":"web01","host":"10.0.0.1","group":"edge","user":{"kind":"plain","value":""},"pass":{"kind":"plain","value":""}}`,
+		header("If-Match", res["version"].(string)))
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "user: enter a literal value") {
+		t.Errorf("emptied username: %d %s", w.Code, w.Body)
 	}
 
 	// Switching to env drops the literal; renaming keeps the position.
@@ -292,7 +304,7 @@ func TestValidateDoesNotSave(t *testing.T) {
 	if !strings.Contains(msgs, "duplicate name") || !strings.Contains(msgs, "pass_arn") {
 		t.Errorf("errors = %s", msgs)
 	}
-	_, out = f.do("POST", "/api/validate", `{"original":"web01","host":{"name":"web01","host":"h2","user":{"kind":"plain"},"pass":{"kind":"plain"}}}`)
+	_, out = f.do("POST", "/api/validate", `{"original":"web01","host":{"name":"web01","host":"h2","user":{"kind":"plain","value":"admin"},"pass":{"kind":"plain"}}}`)
 	if out["ok"] != true {
 		t.Errorf("editing web01 in place should validate: %v", out)
 	}
@@ -304,7 +316,7 @@ func TestValidateDoesNotSave(t *testing.T) {
 func TestDefaultsAndCommands(t *testing.T) {
 	f := newFixture(t)
 	w, res := f.do("PUT", "/api/defaults",
-		`{"port":2222,"timeout":10,"parallel":4,"output":"json","debug":false,"identity_file":"~/.ssh/k","known_hosts":"","host_key_policy":"strict","user":{"kind":"plain","value":""},"pass":{"kind":"env","value":"DEF_PASS"}}`,
+		`{"port":2222,"timeout":10,"parallel":4,"output":"json","debug":false,"identity_file":"~/.ssh/k","known_hosts":"","host_key_policy":"strict","user":{"kind":"plain","value":"deploy"},"pass":{"kind":"env","value":"DEF_PASS"}}`,
 		header("If-Match", f.version()))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body)

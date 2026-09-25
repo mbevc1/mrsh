@@ -17,9 +17,9 @@ import (
 const maxBody = 1 << 20
 
 // Secret is a user or pass field-group as the UI sees it. Kind is "unset",
-// "plain", "env" or "arn". Literal values are never sent to the browser:
-// Set reports whether one exists, and sending kind "plain" with an empty
-// value keeps the stored literal.
+// "plain", "env" or "arn". Literal usernames are shown as-is; literal
+// passwords never reach the browser: Set reports that one exists, and
+// sending kind "plain" with an empty value keeps the stored password.
 type Secret struct {
 	Kind  string `json:"kind"`
 	Value string `json:"value"`
@@ -65,7 +65,10 @@ type ConfigView struct {
 func toSecret(r config.SecretRef) Secret {
 	switch r.Kind() {
 	case config.KindPlain:
-		return Secret{Kind: "plain", Set: true}
+		if r.Field == "user" {
+			return Secret{Kind: "plain", Value: r.Literal, Set: true}
+		}
+		return Secret{Kind: "plain", Set: true} // passwords stay masked
 	case config.KindEnv:
 		return Secret{Kind: "env", Value: r.Env}
 	case config.KindARN:
@@ -74,8 +77,9 @@ func toSecret(r config.SecretRef) Secret {
 	return Secret{Kind: "unset"}
 }
 
-// applySecret turns a Secret back into the three config keys, keeping the
-// stored literal when kind is plain and the value is empty.
+// applySecret turns a Secret back into the three config keys. For the
+// masked password, kind plain with an empty value keeps the stored literal;
+// a visible username that was emptied is an error instead.
 func applySecret(field string, in Secret, old config.SecretRef) (literal, env, arn string, err error) {
 	v := strings.TrimSpace(in.Value)
 	switch in.Kind {
@@ -85,7 +89,7 @@ func applySecret(field string, in Secret, old config.SecretRef) (literal, env, a
 		if in.Value != "" {
 			return in.Value, "", "", nil // literals are verbatim, spaces included
 		}
-		if old.Kind() == config.KindPlain {
+		if field == "pass" && old.Kind() == config.KindPlain {
 			return old.Literal, "", "", nil
 		}
 		return "", "", "", fmt.Errorf("%s: enter a literal value", field)

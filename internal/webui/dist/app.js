@@ -123,7 +123,7 @@ async function onConflict(err) {
 
 function secretText(s) {
   switch (s.kind) {
-    case "plain": return "********";
+    case "plain": return s.value || "********"; // passwords arrive without a value
     case "env": return `env:${s.value}`;
     case "arn": return s.value;
     default: return "";
@@ -211,8 +211,9 @@ function setupSecret(fs) {
 
 function fillSecret(fs, s) {
   $(".kind", fs).value = s.kind || "unset";
-  $(".value", fs).value = s.kind === "plain" ? "" : (s.value || "");
-  fs.dataset.stored = s.kind === "plain" && s.set ? "true" : "false";
+  $(".value", fs).value = s.value || "";
+  // Only the masked password has a hidden stored literal to keep.
+  fs.dataset.stored = s.kind === "plain" && s.set && !s.value ? "true" : "false";
   fs.sync();
 }
 

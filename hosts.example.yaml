@@ -1,0 +1,41 @@
+# Example mrsh config. Copy to hosts.yaml (the default -f path) and edit,
+# or start fresh with: mrsh hosts init
+#
+# Secrets: for each of user and pass, set at most one of
+#   <field>      literal value, taken verbatim
+#   <field>_env  name of an environment variable
+#   <field>_arn  AWS SSM parameter or Secrets Manager ARN (optional #json-key)
+
+defaults:
+  user: deploy
+  port: 22
+  timeout: 30          # seconds, dial + handshake
+  parallel: 5
+  output: text         # text | json | csv
+  identity_file: ~/.ssh/id_ed25519
+  host_key_policy: accept-new   # strict | accept-new | insecure (built-in default: insecure)
+  known_hosts: ~/.ssh/known_hosts
+
+# Run by 'mrsh run' when no -c or --script is given.
+commands:
+  - uptime
+  - df -h
+
+hosts:
+  - name: web01
+    host: 10.0.0.1
+    group: web
+    identity_file: ~/.ssh/web_key
+    pass_env: WEB01_PASS
+
+  - name: db01
+    host: 10.0.0.10
+    group: db
+    user_arn: arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#user
+    pass_arn: arn:aws:secretsmanager:eu-west-1:123456789012:secret:mrsh/db01#pass
+
+  - name: rb01
+    host: 10.0.0.254
+    group: routers
+    user: admin
+    pass_arn: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/rb01/pass

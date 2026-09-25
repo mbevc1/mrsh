@@ -108,6 +108,7 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", mt.FormatBoth, "rsc|backup|both")
+	_ = cmd.RegisterFlagCompletionFunc("format", fixedValues(mt.FormatRSC, mt.FormatBackup, mt.FormatBoth))
 	cmd.Flags().StringVar(&dest, "path", "backups/", "destination: local dir or s3://bucket/prefix/")
 	return cmd
 }

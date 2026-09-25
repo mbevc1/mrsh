@@ -59,7 +59,7 @@ function toast(msg) {
 const clock = () => new Date().toLocaleTimeString();
 
 // busy disables btn and shows label while fn runs. On loopback most calls
-// finish in a few milliseconds, so the state stays up for at least 300 ms
+// finish in a few milliseconds, so the state stays up for at least 200 ms
 // to be noticeable.
 async function busy(btn, label, fn) {
   const text = btn.textContent;
@@ -70,7 +70,7 @@ async function busy(btn, label, fn) {
   try {
     return await fn();
   } finally {
-    const wait = 300 - (performance.now() - started);
+    const wait = 200 - (performance.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     btn.disabled = false;
     btn.textContent = text;

@@ -99,7 +99,7 @@ func newHostsListCmd(opts *globalOptions) *cobra.Command {
 	var showSecrets bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List hosts (secrets masked unless --show-secrets)",
+		Short: "List hosts (passwords masked unless --show-secrets)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			lc, err := loadConfig(cmd, opts)
@@ -115,7 +115,7 @@ func newHostsListCmd(opts *globalOptions) *cobra.Command {
 				e := lc.cfg.Effective(h)
 				rows = append(rows, hostRow{
 					Name: e.Name, Host: e.Host, Port: e.Port, Group: e.Group,
-					User:         e.UserRef().Display(showSecrets),
+					User:         e.UserRef().Display(true), // usernames are not secret
 					Pass:         e.PassRef().Display(showSecrets),
 					IdentityFile: e.IdentityFile,
 				})
@@ -123,7 +123,7 @@ func newHostsListCmd(opts *globalOptions) *cobra.Command {
 			return writeHostRows(cmd.OutOrStdout(), opts.output, rows)
 		},
 	}
-	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "reveal literal user/pass values (references are never resolved)")
+	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "reveal literal passwords (references are never resolved)")
 	return cmd
 }
 

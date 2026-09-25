@@ -19,8 +19,11 @@ func TestHostsListMasksSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "literalsecret") || strings.Contains(out, "deploy") {
-		t.Errorf("literal secrets not masked:\n%s", out)
+	if strings.Contains(out, "literalsecret") {
+		t.Errorf("literal password not masked:\n%s", out)
+	}
+	if !strings.Contains(out, "deploy") {
+		t.Errorf("username hidden; usernames are shown without --show-secrets:\n%s", out)
 	}
 	for _, want := range []string{config.Mask, "env:WEB01_PASS", "arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/db02/pass", "2222"} {
 		if !strings.Contains(out, want) {

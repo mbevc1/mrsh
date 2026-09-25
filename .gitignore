@@ -34,3 +34,8 @@ go.work.sum
 # Build output
 /bin/
 /dist/
+
+# Local config (may hold secrets); hosts.example.yaml is the template
+/hosts.yaml
+/hosts.yaml.lock
+/backups/

@@ -78,10 +78,10 @@ release-build:
 	    -o dist/$(BINARY)_$${os}_$${arch}$$ext . ; \
 	done
 
-## snapshot: local goreleaser build without publishing
+## snapshot: local goreleaser build without publishing (skips SBOMs without syft)
 .PHONY: snapshot
 snapshot:
-	goreleaser release --snapshot --clean
+	goreleaser release --snapshot --clean $(if $(shell command -v syft),,--skip=sbom)
 
 ## clean: remove build artifacts
 .PHONY: clean

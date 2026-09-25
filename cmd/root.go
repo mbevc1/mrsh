@@ -119,7 +119,17 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts))
+	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd())
+	for flag, fn := range map[string]cobra.CompletionFunc{
+		"host":            completeHostNames(opts),
+		"group":           completeGroups(opts),
+		"output":          fixedValues(validOutputs...),
+		"host-key-policy": fixedValues(config.HostKeyStrict, config.HostKeyAcceptNew, config.HostKeyInsecure),
+		"sse":             fixedValues("AES256", "aws:kms"),
+	} {
+		_ = root.RegisterFlagCompletionFunc(flag, fn)
+	}
 	return root, opts
 }
 

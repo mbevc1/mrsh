@@ -181,6 +181,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	f.register(cmd)
+	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
 
@@ -220,6 +221,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "host name to remove")
 	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
 

@@ -12,7 +12,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.1
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.78.1
 	github.com/gliderlabs/ssh v0.3.8
-	github.com/gofrs/flock v0.12.1
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

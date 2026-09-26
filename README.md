@@ -58,7 +58,7 @@ Secrets are resolved only for the hosts a command targets, using the standard AW
 
 ## Config and output
 
-- `-f` takes a local path or `s3://bucket/key`. Edits from the CLI and `mrsh ui` are guarded: a write fails, then reloads and reapplies, if the file changed after it was read (a file lock locally, the ETag on S3).
+- `-f` takes a local path or `s3://bucket/key`. Edits from the CLI and `mrsh ui` are guarded: a write fails, then reloads and reapplies, if the file changed after it was read (a content hash locally, the ETag on S3).
 - `--sse AES256|aws:kms` and `--kms-key ARN` encrypt S3 writes (config and backups).
 - Precedence: CLI flag > `MRSH_DEBUG` > `defaults` in the config > built-in default.
 - `-o text|json|csv`. Logs go to stderr, so `mrsh -o json run -c uptime | jq` works with `--debug` on.

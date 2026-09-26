@@ -37,5 +37,4 @@ go.work.sum
 
 # Local config (may hold secrets); hosts.example.yaml is the template
 /hosts.yaml
-/hosts.yaml.lock
 /backups/

@@ -11,7 +11,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// sharedFlagsHelp explains the reused global flags in add/update help.
 const sharedFlagsHelp = "The address, group, user and identity file come from the global flags:\n" +
 	"  -H/--host ADDRESS, -g/--group GROUP, -u/--user USER, -i/--identity-file PATH.\n" +
 	"Set at most one of --user/--user-env/--user-arn and of --pass/--pass-env/--pass-arn."

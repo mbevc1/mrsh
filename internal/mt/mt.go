@@ -45,7 +45,7 @@ func Weekday(t time.Time) string { return t.Weekday().String()[:3] }
 func BackupBase(dow string) string { return "backup-" + dow }
 
 // ExportCmd writes the text export. v7 exports compact by default; the
-// spec's "compact" keyword is v6 syntax.
+// "compact" keyword is v6 syntax.
 func ExportCmd(dow string) string { return "/export show-sensitive file=" + BackupBase(dow) }
 
 // SaveBackupCmd writes the binary backup.

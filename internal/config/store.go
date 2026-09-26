@@ -84,12 +84,10 @@ func NewStore(uri string, opts StoreOptions) (ConfigStore, error) {
 
 func isLetter(b byte) bool { return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') }
 
-// LocalStore keeps the config in a local file. The version is the SHA-256 of
-// the content: Save re-hashes the file and refuses when it no longer matches
-// the version the caller loaded, so an edit made elsewhere since then (the
-// CLI, another UI tab, a text editor) is never overwritten. Saves within one
-// process (such as mrsh ui serving several tabs) are serialized per path;
-// only two processes saving within the same few microseconds are unguarded.
+// LocalStore keeps the config in a local file, versioned by the SHA-256 of
+// its content: Save refuses when the file changed since it was loaded.
+// Saves within one process are serialized per path; saves from two
+// processes in the same few microseconds are not.
 type LocalStore struct {
 	Path string
 }
@@ -129,8 +127,7 @@ func (s *LocalStore) Save(_ context.Context, raw []byte, ifVersion string) error
 	return writeAtomic(s.Path, raw, mode)
 }
 
-// saveMutexes serializes saves to the same file within this process.
-var saveMutexes sync.Map // cleaned absolute path -> *sync.Mutex
+var saveMutexes sync.Map // absolute path -> *sync.Mutex
 
 func pathMutex(path string) *sync.Mutex {
 	key, err := filepath.Abs(path)

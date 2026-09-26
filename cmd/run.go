@@ -69,7 +69,6 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
-// selectTargets applies --group/--host/--user/--identity-file to the config.
 func selectTargets(lc *loadedConfig, opts *globalOptions) ([]runner.Target, error) {
 	targets, err := runner.Targets(lc.cfg, runner.TargetOptions{
 		Group: opts.group, Hosts: opts.hosts, User: opts.user, IdentityFile: opts.identityFile,

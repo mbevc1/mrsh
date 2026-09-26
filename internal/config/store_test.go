@@ -78,6 +78,10 @@ func TestLocalStoreRoundTrip(t *testing.T) {
 	if raw, _, _ := s.Load(ctx); string(raw) != "v2" {
 		t.Errorf("content = %q, want v2", raw)
 	}
+	// Saves leave nothing next to the config.
+	if entries, _ := os.ReadDir(filepath.Dir(s.Path)); len(entries) != 1 {
+		t.Errorf("extra files beside the config: %v", entries)
+	}
 	if runtime.GOOS != "windows" {
 		fi, _ := os.Stat(s.Path)
 		if fi.Mode().Perm() != 0o600 {

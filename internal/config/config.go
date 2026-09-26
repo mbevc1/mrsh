@@ -99,20 +99,6 @@ func Parse(raw []byte) (*Config, error) {
 	return &c, nil
 }
 
-// Marshal encodes c as YAML.
-func (c *Config) Marshal() ([]byte, error) {
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(c); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
 var validOutputs = map[string]bool{"": true, "text": true, "json": true, "csv": true}
 
 var validHostKeyPolicies = map[string]bool{"": true, HostKeyStrict: true, HostKeyAcceptNew: true, HostKeyInsecure: true}

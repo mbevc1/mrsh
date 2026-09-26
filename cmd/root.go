@@ -125,7 +125,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	root.Flags().BoolP("version", "v", false, "print version and build info (same as 'mrsh version')")
 
 	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd())
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd(), newLambdaCmd())
 	for flag, fn := range map[string]cobra.CompletionFunc{
 		"host":            completeHostNames(opts),
 		"group":           completeGroups(opts),

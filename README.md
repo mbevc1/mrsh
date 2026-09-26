@@ -82,29 +82,15 @@ docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp -e AWS_REGION=eu-west-1 \
 
 ## Scheduled runs on AWS
 
-`deploy/cloudformation.yaml` runs mrsh on an EventBridge Scheduler schedule, either as an **ECS Fargate task** (default) or as a **Lambda function**. Both need subnets that reach the managed hosts and the AWS APIs (NAT or VPC endpoints). The IAM policy covers only the config object and, when set, the backup prefix, SSM/Secrets Manager prefixes and one KMS key.
-
-| | ECS task (default) | Lambda |
-|---|---|---|
-| Run time | unlimited | 15 minutes |
-| Image registry | any (e.g. GHCR) | private ECR, built with `--provenance=false` |
-| Output | CloudWatch Logs | CloudWatch Logs, plus a 256 KiB result |
-| Best for | backups, upgrades, large fleets | quick checks on a few hosts |
+`deploy/cloudformation.yaml` runs mrsh as an ECS Fargate task on an EventBridge Scheduler schedule. The task has no time limit and pulls the image from any registry, GHCR included. Its subnets must reach the managed hosts and the AWS APIs (NAT or VPC endpoints). The IAM policy covers only the config object and, when set, the backup prefix, SSM/Secrets Manager prefixes and one KMS key.
 
 ```bash
-# ECS
 aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM \
   --template-file deploy/cloudformation.yaml --parameter-overrides \
   ImageUri=ghcr.io/mbevc1/mrsh:0.1.0 \
   MrshArgs="-f,s3://my-bucket/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://my-bucket/mrsh/backups/" \
   ConfigBucket=my-bucket ConfigKey=mrsh/hosts.yaml BackupBucket=my-bucket \
   SsmParameterPrefix=mrsh/ SubnetIds=subnet-aaa,subnet-bbb SecurityGroupIds=sg-ccc
-
-# Lambda: push an ECR image without attestations first
-docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
-  -t 123456789012.dkr.ecr.eu-west-1.amazonaws.com/mrsh:0.1.0 --push .
-aws cloudformation deploy ... --parameter-overrides DeployTarget=Lambda \
-  ImageUri=123456789012.dkr.ecr.eu-west-1.amazonaws.com/mrsh:0.1.0 ...
 ```
 
 Things to know:
@@ -113,7 +99,6 @@ Things to know:
 - **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `--confirm`.
 - **No replays:** retries are off, so a failed reboot or upgrade is not repeated.
 - **Host keys:** `/tmp` does not survive between runs, so `accept-new` cannot remember hosts. For verified host keys, use `strict` with a `known_hosts` file baked into a derived image.
-- **Lambda events:** the function takes `{"args": [...]}`. `aws lambda invoke --function-name <FunctionArn> --cli-binary-format raw-in-base64-out --payload '{"args":["mt","version"]}' out.json` runs a one-off.
 
 ## Development
 

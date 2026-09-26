@@ -41,8 +41,15 @@ const VersionScript = `:put ("ros=" . [/system resource get version]); ` +
 // Weekday returns the device-side rolling backup day ("Mon" … "Sun").
 func Weekday(t time.Time) string { return t.Weekday().String()[:3] }
 
-// BackupBase is the on-device file name (without extension) for a weekday.
-func BackupBase(dow string) string { return "backup-" + dow }
+// BackupDir is the device folder that holds the rolling backup set.
+const BackupDir = "backups"
+
+// EnsureBackupDirCmd creates BackupDir unless it exists, so it never fails
+// on a second run.
+const EnsureBackupDirCmd = `:if ([:len [/file find name="` + BackupDir + `"]] = 0) do={/file add type=directory name="` + BackupDir + `"}`
+
+// BackupBase is the on-device path (without extension) for a weekday.
+func BackupBase(dow string) string { return BackupDir + "/" + dow }
 
 // ExportCmd writes the text export. v7 exports compact by default; the
 // "compact" keyword is v6 syntax.
@@ -68,16 +75,17 @@ func Formats(format string) ([]string, error) {
 // or flash/ on boards whose storage is mounted there.
 func RemoteCandidates(file string) []string { return []string{file, "flash/" + file} }
 
-// BackupKey is the sink key <group>/<name>/<YYYY-MM-DD>.<ext>. Hosts with no
-// group use "_ungrouped"; literal --host targets use "_literal/<address>".
-func BackupKey(group, name string, literal bool, date time.Time, ext string) string {
+// BackupKey is the sink key <group>/<name>/<stem>.<ext>, where stem is a
+// weekday or a YYYY-MM-DD date. Hosts with no group use "_ungrouped";
+// literal --host targets use "_literal/<address>".
+func BackupKey(group, name string, literal bool, stem, ext string) string {
 	switch {
 	case literal:
 		group = "_literal"
 	case group == "":
 		group = "_ungrouped"
 	}
-	return path.Join(safeSegment(group), safeSegment(name), date.Format("2006-01-02")+"."+ext)
+	return path.Join(safeSegment(group), safeSegment(name), stem+"."+ext)
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._@-]+`)

@@ -74,7 +74,7 @@ func TestS3MtBackup(t *testing.T) {
 		t.Fatalf("objects: rsc=%+v bin=%+v", rsc, bin)
 	}
 	// The device keeps its rolling files.
-	if _, err := os.Stat(f.root + "/backup-Mon.rsc"); err != nil {
+	if _, err := os.Stat(f.root + "/backups/Mon.rsc"); err != nil {
 		t.Error(err)
 	}
 }

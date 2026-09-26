@@ -45,9 +45,11 @@ func (f *fakeRouter) exec(cmd string) sshtest.Reply {
 	case strings.HasPrefix(cmd, "/system backup save name="):
 		// Some boards store files under flash/.
 		name := strings.TrimPrefix(cmd, "/system backup save name=") + ".backup"
-		_ = os.MkdirAll(filepath.Join(f.root, "flash"), 0o700)
+		_ = os.MkdirAll(filepath.Join(f.root, "flash", mt.BackupDir), 0o700)
 		_ = os.WriteFile(filepath.Join(f.root, "flash", name), []byte("BINARYBACKUP"), 0o600)
 		return sshtest.Reply{Stdout: "Configuration backup saved\n"}
+	case cmd == mt.EnsureBackupDirCmd:
+		_ = os.MkdirAll(filepath.Join(f.root, mt.BackupDir), 0o700)
 	case cmd == mt.RebootCmd, cmd == mt.InstallUpdatesCmd:
 		return sshtest.Reply{Drop: true}
 	case cmd == mt.UpdateStatusCmd:
@@ -105,21 +107,21 @@ func TestMtBackupBothFormats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err=%v\n%s", err, out)
 	}
-	rsc, err := os.ReadFile(filepath.Join(dest, "lab", "rt1", "2026-04-06.rsc"))
+	rsc, err := os.ReadFile(filepath.Join(dest, "lab", "rt1", "Mon.rsc"))
 	if err != nil || !strings.Contains(string(rsc), "/ip address add") {
 		t.Errorf("rsc = %q, %v", rsc, err)
 	}
-	bin, err := os.ReadFile(filepath.Join(dest, "lab", "rt1", "2026-04-06.backup"))
+	bin, err := os.ReadFile(filepath.Join(dest, "lab", "rt1", "Mon.backup"))
 	if err != nil || string(bin) != "BINARYBACKUP" {
 		t.Errorf("backup = %q, %v (flash/ fallback)", bin, err)
 	}
 	// The weekday files stay on the device as the rolling set.
-	for _, p := range []string{"backup-Mon.rsc", "flash/backup-Mon.backup"} {
+	for _, p := range []string{"backups/Mon.rsc", "flash/backups/Mon.backup"} {
 		if _, err := os.Stat(filepath.Join(f.root, p)); err != nil {
 			t.Errorf("device file %s removed: %v", p, err)
 		}
 	}
-	if !strings.Contains(out, "saved lab/rt1/2026-04-06.rsc") {
+	if !strings.Contains(out, "saved lab/rt1/Mon.rsc") {
 		t.Errorf("output:\n%s", out)
 	}
 }
@@ -140,7 +142,7 @@ func TestMtBackupRSCOnlyAndJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &recs); err != nil || len(recs) != 1 {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(filepath.Join(dest, "lab", "rt1", "2026-04-06.backup")); err == nil {
+	if _, err := os.Stat(filepath.Join(dest, "lab", "rt1", "Mon.backup")); err == nil {
 		t.Error(".backup written with --format rsc")
 	}
 }
@@ -174,7 +176,7 @@ func TestMtBackupUsageErrors(t *testing.T) {
 func TestMtBackupDryRun(t *testing.T) {
 	f, cfg := startRouter(t)
 	out, err := execRoot(t, "-f", cfg, "--dry-run", "mt", "backup")
-	if err != nil || !strings.Contains(out, "/export show-sensitive file=backup-Mon") || !strings.Contains(out, "/system backup save name=backup-Mon") {
+	if err != nil || !strings.Contains(out, "/export show-sensitive file=backups/Mon") || !strings.Contains(out, "/system backup save name=backups/Mon") || !strings.Contains(out, "/file add type=directory") {
 		t.Errorf("err=%v\n%s", err, out)
 	}
 	if len(f.sent()) != 0 {

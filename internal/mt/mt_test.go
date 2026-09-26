@@ -86,10 +86,10 @@ func TestCommands(t *testing.T) {
 	if d := Weekday(mon); d != "Mon" {
 		t.Fatalf("Weekday = %s", d)
 	}
-	if got := ExportCmd("Mon"); got != "/export show-sensitive file=backup-Mon" {
+	if got := ExportCmd("Mon"); got != "/export show-sensitive file=backups/Mon" {
 		t.Errorf("ExportCmd = %q", got)
 	}
-	if got := SaveBackupCmd("Sun"); got != "/system backup save name=backup-Sun" {
+	if got := SaveBackupCmd("Sun"); got != "/system backup save name=backups/Sun" {
 		t.Errorf("SaveBackupCmd = %q", got)
 	}
 }
@@ -106,20 +106,20 @@ func TestFormats(t *testing.T) {
 }
 
 func TestBackupKey(t *testing.T) {
-	d := time.Date(2026, 4, 3, 23, 59, 0, 0, time.UTC)
 	tests := []struct {
 		group, name string
 		literal     bool
-		want        string
+		stem, want  string
 	}{
-		{"routers", "rb01", false, "routers/rb01/2026-04-03.rsc"},
-		{"", "rb01", false, "_ungrouped/rb01/2026-04-03.rsc"},
-		{"ignored", "admin@10.0.0.5:2222", true, "_literal/admin@10.0.0.5_2222/2026-04-03.rsc"},
-		{"../etc", "..", false, "_etc/_/2026-04-03.rsc"},
-		{"a/b", "c", false, "a_b/c/2026-04-03.rsc"},
+		{"routers", "rb01", false, "2026-04-03", "routers/rb01/2026-04-03.rsc"},
+		{"routers", "rb01", false, "Fri", "routers/rb01/Fri.rsc"},
+		{"", "rb01", false, "Fri", "_ungrouped/rb01/Fri.rsc"},
+		{"ignored", "admin@10.0.0.5:2222", true, "Fri", "_literal/admin@10.0.0.5_2222/Fri.rsc"},
+		{"../etc", "..", false, "Fri", "_etc/_/Fri.rsc"},
+		{"a/b", "c", false, "Fri", "a_b/c/Fri.rsc"},
 	}
 	for _, tt := range tests {
-		if got := BackupKey(tt.group, tt.name, tt.literal, d, "rsc"); got != tt.want {
+		if got := BackupKey(tt.group, tt.name, tt.literal, tt.stem, "rsc"); got != tt.want {
 			t.Errorf("BackupKey(%q,%q,%v) = %q, want %q", tt.group, tt.name, tt.literal, got, tt.want)
 		}
 	}

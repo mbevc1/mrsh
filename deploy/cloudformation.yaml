@@ -1,0 +1,388 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Scheduled mrsh runs as an ECS Fargate task (default) or a Lambda function,
+  triggered by EventBridge Scheduler, with least-privilege IAM.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: What to run }
+        Parameters: [DeployTarget, ImageUri, MrshArgs, Architecture]
+      - Label: { default: When }
+        Parameters: [ScheduleExpression, ScheduleTimezone, ScheduleState]
+      - Label: { default: Network (must reach the managed hosts) }
+        Parameters: [SubnetIds, SecurityGroupIds, AssignPublicIp]
+      - Label: { default: Data and secrets mrsh may access }
+        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
+      - Label: { default: Sizing and logs }
+        Parameters: [TaskCpu, TaskMemory, LambdaMemorySize, LambdaTimeout, LogRetentionDays]
+
+Parameters:
+  DeployTarget:
+    Type: String
+    Default: ECS
+    AllowedValues: [ECS, Lambda]
+    Description: ECS (no time limit; any registry) or Lambda (15-minute limit; image must be in private ECR, built with --provenance=false).
+  ImageUri:
+    Type: String
+    Description: mrsh image, preferably pinned by digest (e.g. ghcr.io/mbevc1/mrsh@sha256:...; ECR for Lambda).
+  MrshArgs:
+    Type: CommaDelimitedList
+    Description: mrsh arguments, comma-separated. Use s3:// paths for the config and backups, and --confirm for reboot/upgrade.
+    Default: "-f,s3://CHANGE-ME/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://CHANGE-ME/mrsh/backups/"
+  Architecture:
+    Type: String
+    Default: ARM64
+    AllowedValues: [ARM64, X86_64]
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 3 * * ? *)
+    Description: EventBridge Scheduler expression, e.g. cron(0 3 * * ? *) or rate(1 day).
+  ScheduleTimezone:
+    Type: String
+    Default: UTC
+  ScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets with a route to the managed hosts and to S3/SSM/Secrets Manager (NAT or VPC endpoints).
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Must allow outbound SSH to the hosts and HTTPS to AWS APIs.
+  AssignPublicIp:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [DISABLED, ENABLED]
+    Description: ECS only. ENABLED only for public subnets without NAT.
+  ConfigBucket:
+    Type: String
+    AllowedPattern: "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"
+  ConfigKey:
+    Type: String
+    Default: mrsh/hosts.yaml
+  BackupBucket:
+    Type: String
+    Default: ""
+    Description: Bucket for mt backup (empty for no backup access).
+  BackupPrefix:
+    Type: String
+    Default: mrsh/backups/
+  SsmParameterPrefix:
+    Type: String
+    Default: ""
+    Description: SSM parameter path prefix mrsh may read, without a leading slash (e.g. mrsh/). Empty for none.
+  SecretsManagerPrefix:
+    Type: String
+    Default: ""
+    Description: Secrets Manager name prefix mrsh may read (e.g. mrsh/). Empty for none.
+  KmsKeyArn:
+    Type: String
+    Default: ""
+    Description: KMS key for SecureString parameters, secrets or SSE-KMS backups. Empty for none.
+  TaskCpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+  TaskMemory:
+    Type: String
+    Default: "512"
+    Description: MiB; must be valid for TaskCpu (256 CPU allows 512-2048).
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    MinValue: 128
+    MaxValue: 10240
+  LambdaTimeout:
+    Type: Number
+    Default: 900
+    MinValue: 30
+    MaxValue: 900
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+Conditions:
+  IsECS: !Equals [!Ref DeployTarget, ECS]
+  IsLambda: !Equals [!Ref DeployTarget, Lambda]
+  IsArm: !Equals [!Ref Architecture, ARM64]
+  HasBackups: !Not [!Equals [!Ref BackupBucket, ""]]
+  HasSsm: !Not [!Equals [!Ref SsmParameterPrefix, ""]]
+  HasSecrets: !Not [!Equals [!Ref SecretsManagerPrefix, ""]]
+  HasKms: !Not [!Equals [!Ref KmsKeyArn, ""]]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /mrsh/${AWS::StackName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  # What mrsh itself may touch, shared by the Lambda role and the ECS task role.
+  AppPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: mrsh data and secret access
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadConfig
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::${ConfigBucket}/${ConfigKey}
+          - !If
+            - HasBackups
+            - Sid: WriteBackups
+              Effect: Allow
+              Action: [s3:PutObject, s3:AbortMultipartUpload]
+              Resource: !Sub arn:${AWS::Partition}:s3:::${BackupBucket}/${BackupPrefix}*
+            - !Ref AWS::NoValue
+          - !If
+            - HasBackups
+            - Sid: CheckBackupBucket # HeadBucket preflight before touching devices
+              Effect: Allow
+              Action: s3:ListBucket
+              Resource: !Sub arn:${AWS::Partition}:s3:::${BackupBucket}
+            - !Ref AWS::NoValue
+          - !If
+            - HasSsm
+            - Sid: ReadParameters
+              Effect: Allow
+              Action: ssm:GetParameters
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${SsmParameterPrefix}*
+            - !Ref AWS::NoValue
+          - !If
+            - HasSecrets
+            - Sid: ReadSecrets
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretsManagerPrefix}*
+            - !Ref AWS::NoValue
+          - !If
+            - HasKms
+            - Sid: UseKey
+              Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: !Ref KmsKeyArn
+            - !Ref AWS::NoValue
+
+  # ---- ECS ----------------------------------------------------------------
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Condition: IsECS
+    Properties:
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  TaskExecutionRole: # pulls the image and ships logs; mrsh never gets it
+    Type: AWS::IAM::Role
+    Condition: IsECS
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Condition: IsECS
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      ManagedPolicyArns: [!Ref AppPolicy]
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: IsECS
+    Properties:
+      Family: !Sub ${AWS::StackName}-mrsh
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: !Ref Architecture
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: tmp # the only writable path (known_hosts under accept-new, temp files)
+      ContainerDefinitions:
+        - Name: mrsh
+          Image: !Ref ImageUri
+          Essential: true
+          Command: !Ref MrshArgs
+          User: "65532:65532"
+          ReadonlyRootFilesystem: true
+          Privileged: false
+          LinuxParameters:
+            InitProcessEnabled: true
+            Capabilities:
+              Drop: [ALL]
+          MountPoints:
+            - SourceVolume: tmp
+              ContainerPath: /tmp
+              ReadOnly: false
+          Environment:
+            - Name: HOME
+              Value: /tmp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: mrsh
+
+  # ---- Lambda -------------------------------------------------------------
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Condition: IsLambda
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - !Ref AppPolicy
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaENIManagementAccess
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${LogGroup.Arn}:*
+
+  Function:
+    Type: AWS::Lambda::Function
+    Condition: IsLambda
+    Properties:
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      ImageConfig:
+        Command: [lambda]
+      Architectures: [!If [IsArm, arm64, x86_64]]
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Role: !GetAtt FunctionRole.Arn
+      ReservedConcurrentExecutions: 1 # never two runs at once
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds: !Ref SecurityGroupIds
+      Environment:
+        Variables:
+          HOME: /tmp # the only writable path
+      LoggingConfig:
+        LogGroup: !Ref LogGroup
+        LogFormat: Text
+
+  FunctionInvokeConfig: # a failed reboot or upgrade must not be replayed
+    Type: AWS::Lambda::EventInvokeConfig
+    Condition: IsLambda
+    Properties:
+      FunctionName: !Ref Function
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  # ---- Schedule -----------------------------------------------------------
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: start-mrsh
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: !If
+              - IsLambda
+              - - Effect: Allow
+                  Action: lambda:InvokeFunction
+                  Resource: !GetAtt Function.Arn
+              - - Effect: Allow
+                  Action: ecs:RunTask
+                  Resource: !Ref TaskDefinition
+                  Condition:
+                    ArnEquals: { ecs:cluster: !GetAtt Cluster.Arn }
+                - Effect: Allow
+                  Action: iam:PassRole
+                  Resource: [!GetAtt TaskExecutionRole.Arn, !GetAtt TaskRole.Arn]
+                  Condition:
+                    StringEquals: { iam:PassedToService: ecs-tasks.amazonaws.com }
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: !Sub mrsh ${DeployTarget} run for ${AWS::StackName}
+      ScheduleExpression: !Ref ScheduleExpression
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      State: !Ref ScheduleState
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target: !If
+        - IsLambda
+        - Arn: !GetAtt Function.Arn
+          RoleArn: !GetAtt SchedulerRole.Arn
+          Input: !Join ["", ['{"args":["', !Join ['","', !Ref MrshArgs], '"]}']]
+          RetryPolicy:
+            MaximumRetryAttempts: 0
+        - Arn: !GetAtt Cluster.Arn
+          RoleArn: !GetAtt SchedulerRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref TaskDefinition
+            LaunchType: FARGATE
+            PlatformVersion: LATEST
+            NetworkConfiguration:
+              AwsvpcConfiguration:
+                Subnets: !Ref SubnetIds
+                SecurityGroups: !Ref SecurityGroupIds
+                AssignPublicIp: !Ref AssignPublicIp
+          RetryPolicy:
+            MaximumRetryAttempts: 0
+
+Outputs:
+  LogGroupName:
+    Value: !Ref LogGroup
+  ScheduleArn:
+    Value: !GetAtt Schedule.Arn
+  ClusterArn:
+    Condition: IsECS
+    Value: !GetAtt Cluster.Arn
+  TaskDefinitionArn:
+    Condition: IsECS
+    Value: !Ref TaskDefinition
+  FunctionArn:
+    Condition: IsLambda
+    Value: !GetAtt Function.Arn

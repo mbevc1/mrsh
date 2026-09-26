@@ -82,3 +82,21 @@ func TestWriteUnknownFormat(t *testing.T) {
 		t.Error("unknown format accepted")
 	}
 }
+
+func TestWriteFull(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatFull, sample); err != nil {
+		t.Fatal(err)
+	}
+	want := `== web01 (10.0.0.1, web)  exit 0  142ms
+up 4 days
+load 0.1
+== db01 (10.0.0.10, db)  exit 1  88ms
+[stderr] permission "denied", sorry
+== x (x)  failed  0ms
+[error] dial x:22: refused
+`
+	if buf.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+	}
+}

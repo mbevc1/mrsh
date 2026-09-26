@@ -146,7 +146,7 @@ func writeHostRows(w io.Writer, format string, rows []hostRow) error {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
-	case "text":
+	case "text", "full": // already complete, so full is the same table
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 		_, _ = fmt.Fprintln(tw, "NAME\tHOST\tPORT\tGROUP\tUSER\tPASS\tIDENTITY")
 		for _, r := range rows {

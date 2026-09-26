@@ -71,6 +71,7 @@ func formatDuration(d time.Duration) string {
 // Output formats.
 const (
 	FormatText = "text"
+	FormatFull = "full"
 	FormatJSON = "json"
 	FormatCSV  = "csv"
 )
@@ -80,12 +81,55 @@ func Write(w io.Writer, format string, results []Result) error {
 	switch format {
 	case FormatText, "":
 		return WriteText(w, results)
+	case FormatFull:
+		return WriteFull(w, results)
 	case FormatJSON:
 		return WriteJSON(w, results)
 	case FormatCSV:
 		return WriteCSV(w, results)
 	}
 	return fmt.Errorf("unknown output format %q", format)
+}
+
+// WriteFull prints each result as a header line followed by its complete
+// stdout, then stderr lines prefixed [stderr], then any error.
+func WriteFull(w io.Writer, results []Result) error {
+	bw := &errWriter{w: w}
+	for _, r := range results {
+		exit := "exit " + strconv.Itoa(r.ExitCode)
+		if r.Err != nil && r.ExitCode == -1 {
+			exit = "failed"
+		}
+		host := r.Host
+		if r.Group != "" {
+			host += ", " + r.Group
+		}
+		bw.printf("== %s (%s)  %s  %s\n", r.Name, host, exit, formatDuration(r.Duration))
+		if out := strings.TrimRight(r.Stdout, "\n"); out != "" {
+			bw.printf("%s\n", out)
+		}
+		if errOut := strings.TrimRight(r.Stderr, "\n"); errOut != "" {
+			for _, l := range strings.Split(errOut, "\n") {
+				bw.printf("[stderr] %s\n", l)
+			}
+		}
+		if r.Err != nil {
+			bw.printf("[error] %s\n", oneLine(r.Err.Error()))
+		}
+	}
+	return bw.err
+}
+
+// errWriter keeps the first write error so callers check once.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) printf(format string, args ...any) {
+	if e.err == nil {
+		_, e.err = fmt.Fprintf(e.w, format, args...)
+	}
 }
 
 // record is the JSON/CSV shape of a Result. Field order is the column order.

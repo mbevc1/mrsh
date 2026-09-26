@@ -244,11 +244,12 @@ func TestWarnIfInsecure(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	WarnIfInsecure(ssh.PolicyStrict, 3)
+	WarnIfInsecure(ssh.PolicyStrict, false, 3)
+	WarnIfInsecure(ssh.PolicyInsecure, true, 3)
 	if buf.Len() != 0 {
-		t.Errorf("warned for strict: %s", buf.String())
+		t.Errorf("warned for strict or a chosen insecure: %s", buf.String())
 	}
-	WarnIfInsecure(ssh.PolicyInsecure, 3)
+	WarnIfInsecure(ssh.PolicyInsecure, false, 3)
 	if !strings.Contains(buf.String(), "host key checking disabled") {
 		t.Errorf("no warning: %q", buf.String())
 	}

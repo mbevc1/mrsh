@@ -11,7 +11,7 @@ defaults:
   port: 22
   timeout: 30          # seconds, dial + handshake
   parallel: 5
-  output: text         # text | json | csv
+  output: text         # text | full | json | csv
   identity_file: ~/.ssh/id_ed25519
   host_key_policy: accept-new   # strict | accept-new | insecure (built-in default: insecure)
   known_hosts: ~/.ssh/known_hosts

@@ -79,8 +79,8 @@ snapshot: ## local goreleaser build without publishing (skips SBOMs without syft
 	goreleaser release --snapshot --clean $(if $(shell command -v syft),,--skip=sbom)
 
 .PHONY: clean
-clean: ## remove binaries, dist/, coverage and test output, and temp files
-	rm -rf $(BINARY) $(BINARY).exe dist coverage.* *.out *.test *.coverprofile profile.cov .*.tmp-*
+clean: ## remove binaries, dist/, coverage and test output
+	rm -rf $(BINARY) $(BINARY).exe dist coverage.* *.out *.test *.coverprofile profile.cov
 
 .PHONY: help
 help: ## list targets

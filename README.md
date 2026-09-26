@@ -107,7 +107,7 @@ make build      # ./mrsh with version info from git
 make test       # race detector + coverage
 make lint       # golangci-lint
 make snapshot   # goreleaser cross-compile into ./dist (needs goreleaser)
-make clean      # remove binaries, dist/, coverage and temp files
+make clean      # remove binaries, dist/, coverage and test output
 make help       # list all targets
 ```
 

@@ -42,8 +42,9 @@ hosts: []
 
 func newHostsCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "hosts",
-		Short: "Manage the hosts config",
+		Use:     "hosts",
+		Aliases: []string{"ho", "h"},
+		Short:   "Manage the hosts config",
 	}
 	cmd.AddCommand(newHostsInitCmd(opts), newHostsListCmd(opts),
 		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts))

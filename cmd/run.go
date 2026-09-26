@@ -25,8 +25,9 @@ var newResolver = func() runner.SecretResolver { return config.NewResolver() }
 func newRunCmd(opts *globalOptions) *cobra.Command {
 	var command, script string
 	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run a command or script on hosts",
+		Use:     "run",
+		Aliases: []string{"ru", "r"},
+		Short:   "Run a command or script on hosts",
 		Long: "Run a command (-c) or local script (--script, piped to 'sh -s') on the selected hosts.\n" +
 			"With neither, the config's commands: list runs as one script.",
 		Args: cobra.NoArgs,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"runtime/debug"
+	"strings"
 	"testing"
 )
 
@@ -126,4 +127,22 @@ func withBuildVars(t *testing.T, ver, rev, when string, bi *debug.BuildInfo) {
 	})
 	version, commit, date = ver, rev, when
 	readBuildInfo = func() (*debug.BuildInfo, bool) { return bi, bi != nil }
+}
+
+func TestVersionFlag(t *testing.T) {
+	withBuildVars(t, "v0.2.0", "abc1234", "2026-09-26T10:00:00Z", nil)
+	builtBy = "test"
+	want, err := execRoot(t, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"-v", "--version"} {
+		got, err := execRoot(t, flag)
+		if err != nil || got != want {
+			t.Errorf("%s = %q (err %v), want %q", flag, got, err, want)
+		}
+	}
+	if !strings.HasPrefix(want, "mrsh v0.2.0\n  commit:  abc1234\n") {
+		t.Errorf("version text = %q", want)
+	}
 }

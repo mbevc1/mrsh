@@ -18,7 +18,7 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .DEFAULT_GOAL := build
 
-## build: compile for the host platform into ./$(BINARY)
+## build: compile for the host platform into ./mrsh
 .PHONY: build
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -90,12 +90,15 @@ docker:
 snapshot:
 	goreleaser release --snapshot --clean $(if $(shell command -v syft),,--skip=sbom)
 
-## clean: remove build artifacts
+## clean: remove binaries, dist/, coverage and test output, and leftover temp files
 .PHONY: clean
 clean:
-	rm -rf $(BINARY) dist coverage.out
+	rm -rf $(BINARY) $(BINARY).exe dist coverage.* *.out *.test *.coverprofile profile.cov
+	find . -path ./.git -prune -o -type f -name '.*.tmp-*' -print -exec rm -f {} +
 
 ## help: list targets
 .PHONY: help
 help:
-	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //'
+	@echo "Usage: make <target> [VAR=value]"
+	@echo
+	@awk '/^## / { l = substr($$0, 4); i = index(l, ": "); printf "  %-14s %s\n", substr(l, 1, i - 1), substr(l, i + 2) }' $(MAKEFILE_LIST)

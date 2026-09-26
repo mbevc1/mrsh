@@ -107,6 +107,8 @@ make build      # ./mrsh with version info from git
 make test       # race detector + coverage
 make lint       # golangci-lint
 make snapshot   # goreleaser cross-compile into ./dist (needs goreleaser)
+make clean      # remove binaries, dist/, coverage and temp files
+make help       # list all targets
 ```
 
 Tests need no network or cloud access: SSH, SFTP and S3 run against in-process fakes. Releases are cut by pushing a `v*` tag.

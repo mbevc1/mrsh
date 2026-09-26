@@ -39,7 +39,6 @@ func newMtCmd(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
-// mtTargets loads the config and selects targets, shared by every mt command.
 func mtTargets(cmd *cobra.Command, opts *globalOptions) ([]runner.Target, error) {
 	lc, err := loadConfig(cmd, opts)
 	if err != nil {
@@ -176,7 +175,6 @@ func waitForFile(ctx context.Context, conn *ssh.Conn, file string) (string, erro
 	}
 }
 
-// confirmTargets asks before a disruptive action unless --confirm was given.
 func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) error {
 	w := cmd.ErrOrStderr()
 	_, _ = fmt.Fprintf(w, "About to %s %d device(s):\n", action, len(targets))

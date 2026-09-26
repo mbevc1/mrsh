@@ -16,7 +16,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// starterConfig is written by `hosts init`.
 const starterConfig = `# mrsh hosts config
 defaults:
   port: 22

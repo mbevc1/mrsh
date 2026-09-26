@@ -342,10 +342,9 @@ function selectTab(name) {
 
 let heartbeatTimer;
 
-// Exit stops the mrsh ui process, then tries to close the tab. Browsers only
-// let scripts close tabs they opened, so a tab opened from the terminal
-// shows a "stopped" page instead.
-// (The host editor is modal, so Exit can't be clicked mid-edit.)
+// Browsers only let scripts close tabs they opened, so a tab opened from the
+// terminal shows a "stopped" page instead. No unsaved-edit check is needed:
+// the host editor is modal, so Exit can't be clicked mid-edit.
 async function exitUI() {
   try {
     await busy($("#exit"), "Exiting…", () => api("POST", "/api/shutdown", {}));

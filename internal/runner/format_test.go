@@ -41,7 +41,7 @@ func TestWriteJSON(t *testing.T) {
 	if got[2]["error"] != "dial x:22: refused" || got[2]["exit_code"] != -1.0 {
 		t.Errorf("error row = %v", got[2])
 	}
-	// Spec key order.
+	// Keys in the documented order.
 	if !strings.Contains(buf.String(), `"host": "10.0.0.1",
     "name": "web01",
     "group": "web",

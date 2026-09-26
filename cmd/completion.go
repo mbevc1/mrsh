@@ -107,7 +107,6 @@ func completeNames(opts *globalOptions) cobra.CompletionFunc {
 	}
 }
 
-// fixedValues completes a flag from a fixed list.
 func fixedValues(values ...string) cobra.CompletionFunc {
 	return func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		return values, cobra.ShellCompDirectiveNoFileComp

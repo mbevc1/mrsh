@@ -19,7 +19,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// globalOptions holds the persistent flags shared by every subcommand.
 type globalOptions struct {
 	config       string
 	group        string
@@ -119,9 +118,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	// -v/--version: cobra adds the flag once Version is set; the template
-	// prints the same block as `mrsh version`. Template braces cannot occur
-	// in the text, so it is safe to use verbatim.
+	// The version text contains no "{{", so it works as a template verbatim.
 	info := currentVersionInfo()
 	root.Version = info.Version
 	root.SetVersionTemplate(versionText(info))
@@ -141,7 +138,6 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	return root, opts
 }
 
-// flagAliases maps alternate flag spellings to their canonical name.
 var flagAliases = map[string]string{"hosts": "host"}
 
 func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
@@ -151,8 +147,7 @@ func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	return pflag.NormalizedName(name)
 }
 
-// setupLogging installs a text slog handler on w: Debug when enabled, else Warn.
-// Logs go to stderr so stdout stays clean for --output json|csv.
+// setupLogging logs to w (stderr) so stdout stays clean for --output json|csv.
 func setupLogging(w io.Writer, debug bool) {
 	level := slog.LevelWarn
 	if debug {

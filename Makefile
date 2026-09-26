@@ -16,7 +16,7 @@ LDFLAGS := -s -w \
 # cross-compile matrix
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := help
 
 ## build: compile for the host platform into ./mrsh
 .PHONY: build

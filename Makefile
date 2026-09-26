@@ -18,56 +18,46 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .DEFAULT_GOAL := help
 
-## build: compile for the host platform into ./mrsh
 .PHONY: build
-build:
+build: ## compile for the host platform into ./mrsh
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-## install: build and install into GOBIN
 .PHONY: install
-install:
+install: ## build and install into GOBIN
 	CGO_ENABLED=0 go install -trimpath -ldflags "$(LDFLAGS)" .
 
-## run: build then run (use ARGS="-g web run -c uptime")
 .PHONY: run
-run: build
+run: build ## build then run (use ARGS="-g web run -c uptime")
 	./$(BINARY) $(ARGS)
 
-## test: run unit tests with race detector + coverage
 .PHONY: test
-test:
+test: ## run unit tests with race detector + coverage
 	go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
-## cover: open the HTML coverage report
 .PHONY: cover
-cover: test
+cover: test ## open the HTML coverage report
 	go tool cover -html=coverage.out
 
-## lint: golangci-lint (install if missing)
 .PHONY: lint
-lint:
+lint: ## golangci-lint (install if missing)
 	@command -v golangci-lint >/dev/null || { echo "install golangci-lint: https://golangci-lint.run"; exit 1; }
 	golangci-lint run ./...
 
-## vet: go vet
 .PHONY: vet
-vet:
+vet: ## go vet
 	go vet ./...
 
-## tidy: go mod tidy + verify
 .PHONY: tidy
-tidy:
+tidy: ## go mod tidy + verify
 	go mod tidy && go mod verify
 
-## check-tools: verify optional runtime deps present
 .PHONY: check-tools
-check-tools:
+check-tools: ## verify optional runtime deps present
 	@command -v ssh >/dev/null && echo "ssh: ok" || echo "ssh: not found (only needed if using ssh-agent auth)"
 	@echo "note: v1 needs no external binaries; 'sops' becomes relevant only if config encryption is enabled later"
 
-## release-build: cross-compile all platforms into ./dist
 .PHONY: release-build
-release-build:
+release-build: ## cross-compile all platforms into ./dist
 	@mkdir -p dist
 	@for p in $(PLATFORMS); do \
 	  os=$${p%/*}; arch=$${p#*/}; \
@@ -78,27 +68,21 @@ release-build:
 	    -o dist/$(BINARY)_$${os}_$${arch}$$ext . ; \
 	done
 
-## docker: build the container image for the host platform (IMAGE=mrsh:dev)
 IMAGE ?= mrsh:dev
 .PHONY: docker
-docker:
-	docker buildx build --load -t $(IMAGE) \
+docker: ## build the container image for the host platform (IMAGE=mrsh:dev)
+	docker build -t $(IMAGE) \
 	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) .
 
-## snapshot: local goreleaser build without publishing (skips SBOMs without syft)
 .PHONY: snapshot
-snapshot:
+snapshot: ## local goreleaser build without publishing (skips SBOMs without syft)
 	goreleaser release --snapshot --clean $(if $(shell command -v syft),,--skip=sbom)
 
-## clean: remove binaries, dist/, coverage and test output, and leftover temp files
 .PHONY: clean
-clean:
-	rm -rf $(BINARY) $(BINARY).exe dist coverage.* *.out *.test *.coverprofile profile.cov
-	find . -path ./.git -prune -o -type f -name '.*.tmp-*' -print -exec rm -f {} +
+clean: ## remove binaries, dist/, coverage and test output, and temp files
+	rm -rf $(BINARY) $(BINARY).exe dist coverage.* *.out *.test *.coverprofile profile.cov .*.tmp-*
 
-## help: list targets
 .PHONY: help
-help:
-	@echo "Usage: make <target> [VAR=value]"
-	@echo
-	@awk '/^## / { l = substr($$0, 4); i = index(l, ": "); printf "  %-14s %s\n", substr(l, 1, i - 1), substr(l, i + 2) }' $(MAKEFILE_LIST)
+help: ## list targets
+	@printf 'Usage: make \033[36m<target>\033[0m [VAR=value]\n\n'
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'

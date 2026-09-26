@@ -78,14 +78,12 @@ release-build:
 	    -o dist/$(BINARY)_$${os}_$${arch}$$ext . ; \
 	done
 
-## docker: build the container image for the host platform (IMAGE=mrsh:dev, DOCKER_CA=proxy CA bundle)
+## docker: build the container image for the host platform (IMAGE=mrsh:dev)
 IMAGE ?= mrsh:dev
-, := ,
 .PHONY: docker
 docker:
 	docker buildx build --load -t $(IMAGE) \
-	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) \
-	  $(if $(DOCKER_CA),--secret id=ca$(,)src=$(DOCKER_CA)) .
+	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) .
 
 ## snapshot: local goreleaser build without publishing (skips SBOMs without syft)
 .PHONY: snapshot

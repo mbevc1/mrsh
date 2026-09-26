@@ -78,7 +78,7 @@ docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp -e AWS_REGION=eu-west-1 \
   ghcr.io/mbevc1/mrsh -f s3://my-bucket/mrsh/hosts.yaml -g routers mt backup --path s3://my-bucket/mrsh/backups/
 ```
 
-`make docker` builds it locally. Behind a TLS-inspecting proxy, pass its CA bundle: `make docker DOCKER_CA=/path/to/ca.crt`. `mrsh ui` listens on loopback only, so it is not reachable from outside a container.
+`make docker` builds it locally. `mrsh ui` listens on loopback only, so it is not reachable from outside a container.
 
 ## Scheduled runs on AWS
 

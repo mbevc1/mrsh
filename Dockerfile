@@ -7,13 +7,9 @@ FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f42
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly
 WORKDIR /src
 
-# Behind a TLS-inspecting proxy, pass its CA bundle:
-#   docker buildx build --secret id=ca,src=/path/to/ca-bundle.crt .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=bind,source=go.mod,target=go.mod \
     --mount=type=bind,source=go.sum,target=go.sum \
-    --mount=type=secret,id=ca,required=false \
-    if [ -s /run/secrets/ca ]; then export SSL_CERT_FILE=/run/secrets/ca; fi; \
     go mod download
 
 ARG TARGETOS TARGETARCH

@@ -25,14 +25,14 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 
 | Command | What it does |
 |---------|--------------|
-| `run -c CMD` / `run --script FILE` | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
-| `hosts init\|list\|add\|update\|remove` | Manage the host inventory. `list` masks literal passwords unless `--show-secrets`. |
+| `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
+| `hosts init\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `list` masks literal passwords unless `--show-secrets`. |
 | `mt backup` | Export `.rsc` and binary `.backup` files on each router (kept on the device as a rolling 7-day set), then download dated copies to `--path` (a local dir or `s3://bucket/prefix/`). |
 | `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `--confirm`. |
 | `mt version` | Firmware and package versions across the fleet. |
 | `ui` | A local browser editor for the same config (loopback only; edits config, never runs commands). |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
-| `version` | Build info. |
+| `version`, or `-v` / `--version` | Build info. |
 
 ## Targeting hosts
 

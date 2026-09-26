@@ -12,6 +12,11 @@ func TestTopLevelCommandsRegistered(t *testing.T) {
 			t.Errorf("command %q not registered (err %v)", name, err)
 		}
 	}
+	for alias, name := range map[string]string{"ru": "run", "r": "run", "ho": "hosts", "h": "hosts"} {
+		if c, _, err := root.Find([]string{alias}); err != nil || c.Name() != name {
+			t.Errorf("alias %q does not resolve to %q (err %v)", alias, name, err)
+		}
+	}
 	for _, path := range [][]string{
 		{"hosts", "init"}, {"hosts", "list"}, {"hosts", "add"}, {"hosts", "update"}, {"hosts", "remove"},
 		{"mt", "backup"}, {"mt", "reboot"}, {"mt", "upgrade"}, {"mt", "version"},

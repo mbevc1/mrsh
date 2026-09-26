@@ -119,6 +119,14 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
+	// -v/--version: cobra adds the flag once Version is set; the template
+	// prints the same block as `mrsh version`. Template braces cannot occur
+	// in the text, so it is safe to use verbatim.
+	info := currentVersionInfo()
+	root.Version = info.Version
+	root.SetVersionTemplate(versionText(info))
+	root.Flags().BoolP("version", "v", false, "print version and build info (same as 'mrsh version')")
+
 	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
 	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd())
 	for flag, fn := range map[string]cobra.CompletionFunc{

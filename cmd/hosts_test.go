@@ -150,3 +150,14 @@ func TestDefaultsPrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestAliasesRunEndToEnd(t *testing.T) {
+	out, err := execRoot(t, "h", "list", "-f", testdataHosts, "-g", "db")
+	if err != nil || !strings.Contains(out, "db02") || strings.Contains(out, "web01") {
+		t.Errorf("mrsh h list: err=%v\n%s", err, out)
+	}
+	out, err = execRoot(t, "-f", testdataHosts, "--dry-run", "-H", "web01", "r", "-c", "uptime")
+	if err != nil || !strings.Contains(out, "would run on 1 host") {
+		t.Errorf("mrsh r: err=%v\n%s", err, out)
+	}
+}

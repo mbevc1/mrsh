@@ -32,7 +32,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `mt version` | Firmware and package versions across the fleet. |
 | `ui` | A local browser editor for the same config (loopback only; edits config, never runs commands). |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
-| `version`, or `-v` / `--version` | Build info. |
+| `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
 ## Targeting hosts
 

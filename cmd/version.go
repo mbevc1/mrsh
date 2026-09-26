@@ -86,9 +86,10 @@ func currentVersionInfo() versionInfo {
 
 func newVersionCmd(opts *globalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Show mrsh build info",
-		Args:  cobra.NoArgs,
+		Use:     "version",
+		Aliases: []string{"v", "ver"},
+		Short:   "Show mrsh build info",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := currentVersionInfo()
 			out := cmd.OutOrStdout()

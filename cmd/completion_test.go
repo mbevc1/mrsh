@@ -12,7 +12,7 @@ func TestTopLevelCommandsRegistered(t *testing.T) {
 			t.Errorf("command %q not registered (err %v)", name, err)
 		}
 	}
-	for alias, name := range map[string]string{"ru": "run", "r": "run", "ho": "hosts", "h": "hosts"} {
+	for alias, name := range map[string]string{"ru": "run", "r": "run", "ho": "hosts", "h": "hosts", "v": "version", "ver": "version"} {
 		if c, _, err := root.Find([]string{alias}); err != nil || c.Name() != name {
 			t.Errorf("alias %q does not resolve to %q (err %v)", alias, name, err)
 		}

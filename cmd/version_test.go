@@ -136,7 +136,7 @@ func TestVersionFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, flag := range []string{"-v", "--version"} {
+	for _, flag := range []string{"-v", "--version", "v", "ver"} {
 		got, err := execRoot(t, flag)
 		if err != nil || got != want {
 			t.Errorf("%s = %q (err %v), want %q", flag, got, err, want)

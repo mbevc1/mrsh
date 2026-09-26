@@ -19,14 +19,14 @@ mrsh -g web -p 5 run -c uptime                    # run on the web group, 5 at a
 mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 ```
 
-`hosts.example.yaml` shows every config option.
+`mrsh hosts example` prints an annotated example config ([source](internal/config/example.yaml)).
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
-| `hosts init\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `list` masks literal passwords unless `--show-secrets`. |
+| `hosts init\|example\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. |
 | `mt backup` | Export `.rsc` and binary `.backup` files on each router (kept on the device as a rolling 7-day set), then download dated copies to `--path` (a local dir or `s3://bucket/prefix/`). |
 | `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `--confirm`. |
 | `mt version` | Firmware and package versions across the fleet. |

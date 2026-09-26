@@ -161,3 +161,13 @@ func TestAliasesRunEndToEnd(t *testing.T) {
 		t.Errorf("mrsh r: err=%v\n%s", err, out)
 	}
 }
+
+func TestHostsExample(t *testing.T) {
+	out, err := execRoot(t, "hosts", "example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != string(config.Example) {
+		t.Fatalf("output differs from config.Example:\n%s", out)
+	}
+}

@@ -121,7 +121,7 @@ func TestMtBackupBothFormats(t *testing.T) {
 			t.Errorf("device file %s removed: %v", p, err)
 		}
 	}
-	if !strings.Contains(out, "saved lab/rt1/Mon.rsc") {
+	if !strings.Contains(out, "saved lab/rt1/Mon.rsc (45 B), Mon.backup (12 B)") || strings.Contains(out, "lines)") {
 		t.Errorf("output:\n%s", out)
 	}
 }
@@ -275,5 +275,16 @@ func TestMtVersion(t *testing.T) {
 	}
 	if recs[0]["ros_version"] != "7.14" || recs[0]["rb_firmware"] != "7.13.2" || recs[0]["name"] != "rt1" {
 		t.Errorf("record = %v", recs[0])
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	for n, want := range map[int64]string{
+		0: "0 B", 1023: "1023 B", 1024: "1.0 KiB", 14336: "14.0 KiB",
+		1572864: "1.5 MiB", 3 << 30: "3.0 GiB",
+	} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

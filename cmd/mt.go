@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -106,9 +107,15 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 							res.Err, res.ExitCode = err, -1
 							break
 						}
-						saved = append(saved, fmt.Sprintf("saved %s (%d bytes)", key, n))
+						name := key
+						if len(saved) > 0 {
+							name = path.Base(key) // the folder is already named once
+						}
+						saved = append(saved, fmt.Sprintf("%s (%s)", name, humanBytes(n)))
 					}
-					res.Stdout = strings.Join(saved, "\n")
+					if len(saved) > 0 {
+						res.Stdout = "saved " + strings.Join(saved, ", ")
+					}
 				}))
 			if err := runner.Write(cmd.OutOrStdout(), opts.output, results); err != nil {
 				return err
@@ -120,6 +127,18 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	_ = cmd.RegisterFlagCompletionFunc("format", fixedValues(mt.FormatRSC, mt.FormatBackup, mt.FormatBoth))
 	cmd.Flags().StringVar(&dest, "path", "backups/", "destination: local dir or s3://bucket/prefix/")
 	return cmd
+}
+
+// humanBytes formats n in binary units with one decimal, e.g. "14.0 KiB".
+func humanBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	v, unit := float64(n)/1024, 0
+	for v >= 1024 && unit < 2 {
+		v, unit = v/1024, unit+1
+	}
+	return fmt.Sprintf("%.1f %s", v, []string{"KiB", "MiB", "GiB"}[unit])
 }
 
 func backupCmd(ext, day string) string {

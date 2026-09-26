@@ -18,10 +18,10 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .DEFAULT_GOAL := build
 
-## build: compile for the host platform into ./bin
+## build: compile for the host platform into ./$(BINARY)
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 ## install: build and install into GOBIN
 .PHONY: install
@@ -31,7 +31,7 @@ install:
 ## run: build then run (use ARGS="-g web run -c uptime")
 .PHONY: run
 run: build
-	./bin/$(BINARY) $(ARGS)
+	./$(BINARY) $(ARGS)
 
 ## test: run unit tests with race detector + coverage
 .PHONY: test
@@ -86,7 +86,7 @@ snapshot:
 ## clean: remove build artifacts
 .PHONY: clean
 clean:
-	rm -rf bin dist coverage.out
+	rm -rf $(BINARY) dist coverage.out
 
 ## help: list targets
 .PHONY: help

@@ -67,7 +67,7 @@ Secrets are resolved only for the hosts a command targets, using the standard AW
 ## Development
 
 ```bash
-make build      # ./bin/mrsh with version info from git
+make build      # ./mrsh with version info from git
 make test       # race detector + coverage
 make lint       # golangci-lint
 make snapshot   # goreleaser cross-compile into ./dist (needs goreleaser)

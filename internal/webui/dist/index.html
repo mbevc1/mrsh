@@ -10,7 +10,11 @@
 <body>
 <header>
   <div class="brand">mrsh <span>config</span></div>
-  <div class="where" id="location"></div>
+  <div class="where">
+    <span class="where-label">Config</span>
+    <code id="location" class="where-path"></code>
+    <button id="copy-location" type="button" class="icon" title="Copy config location" aria-label="Copy config location"></button>
+  </div>
   <button id="reload" type="button" class="ghost">Reload</button>
   <button id="exit" type="button" class="ghost danger" title="Stop mrsh ui and close this tab">Exit</button>
 </header>

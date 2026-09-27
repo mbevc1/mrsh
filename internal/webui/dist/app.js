@@ -58,6 +58,49 @@ function toast(msg) {
 
 const clock = () => new Date().toLocaleTimeString();
 
+// copyIcon builds the two-squares glyph; SVG, since CSP forbids inline styles.
+function copyIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [x, y] of [[8, 8], [4, 4]]) {
+    const r = document.createElementNS(ns, "rect");
+    for (const [k, v] of Object.entries({ x, y, width: 12, height: 12, rx: 2 })) r.setAttribute(k, v);
+    svg.append(r);
+  }
+  return svg;
+}
+
+// copyText uses the Clipboard API (loopback counts as a secure context),
+// falling back to a hidden textarea for older browsers.
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.className = "offscreen";
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) { toast(`Could not copy ${what}`); return; }
+  }
+  toast(`Copied ${what}: ${text}`);
+}
+
+function copyButton(text, what) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "icon";
+  b.title = `Copy ${what}`;
+  b.setAttribute("aria-label", b.title);
+  b.append(copyIcon());
+  b.addEventListener("click", () => copyText(text, what));
+  return b;
+}
+
 // busy disables btn and shows label while fn runs. On loopback most calls
 // finish in a few milliseconds, so the state stays up for at least 200 ms
 // to be noticeable.
@@ -137,6 +180,12 @@ function cell(text, cls) {
   return td;
 }
 
+function hostCell(h) {
+  const td = cell(h.host);
+  td.append(copyButton(h.host, `${h.name} address`));
+  return td;
+}
+
 function render() {
   const cfg = state.cfg;
   $("#location").textContent = cfg.location;
@@ -169,7 +218,7 @@ function renderHosts() {
   for (const h of rows) {
     const tr = document.createElement("tr");
     tr.append(
-      cell(h.name), cell(h.host), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
+      cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
       cell(secretText(h.user) || "default", "ref"), cell(secretText(h.pass) || "default", "ref"),
       cell(h.identity_file || "default", h.identity_file ? "ref" : "muted"),
@@ -385,6 +434,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#commands-form").addEventListener("submit", saveCommands);
   $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
+  $("#copy-location").append(copyIcon());
+  $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();
   heartbeatTimer = setInterval(heartbeat, 5000);
 });

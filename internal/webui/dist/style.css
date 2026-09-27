@@ -18,7 +18,16 @@ body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-ser
 header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { font-weight: 650; font-size: 16px; }
 .brand span { color: var(--muted); font-weight: 400; }
-.where { color: var(--muted); font-family: var(--mono); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.where-label { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.where-path { color: var(--accent); font-weight: 600; font-size: 13px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+button.icon { background: none; border: 0; color: var(--muted); padding: 2px; margin-left: 4px; line-height: 0; vertical-align: middle; }
+button.icon:hover, button.icon:focus-visible { color: var(--accent); }
+button.icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
+td button.icon { opacity: 0.35; }
+tr:hover td button.icon, td button.icon:focus-visible { opacity: 1; }
+.offscreen { position: fixed; left: -9999px; top: 0; }
 .banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); }
 .tabs { display: flex; gap: 4px; padding: 12px 20px 0; }
 .tabs button { background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; }

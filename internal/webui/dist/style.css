@@ -24,8 +24,6 @@ header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; bord
 button.icon { background: none; border: 0; color: var(--muted); padding: 2px; margin-left: 4px; line-height: 0; vertical-align: middle; }
 button.icon:hover, button.icon:focus-visible { color: var(--accent); }
 button.icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-td button.icon { opacity: 0.35; }
-tr:hover td button.icon, td button.icon:focus-visible { opacity: 1; }
 .offscreen { position: fixed; left: -9999px; top: 0; }
 .banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); }
 .tabs { display: flex; gap: 4px; padding: 12px 20px 0; }

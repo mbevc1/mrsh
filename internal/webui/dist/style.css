@@ -1,7 +1,7 @@
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
   --accent: #2f5bd3; --accent-text: #ffffff; --danger: #b3261e; --warn-bg: #fff4d6; --warn-text: #6a4b00;
-  --ok-bg: #e3f4e8; --ok-text: #1d5b30;
+  --ok-bg: #e3f4e8; --ok-text: #1d5b30; --hover: #f1f0eb;
   --radius: 8px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light dark;
 }
@@ -9,7 +9,7 @@
   :root {
     --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a94; --line: #34332f;
     --accent: #7c9bff; --accent-text: #0d0d0c; --danger: #ff8a80; --warn-bg: #3a2f10; --warn-text: #f3d98a;
-    --ok-bg: #16311f; --ok-text: #a6e3b8;
+    --ok-bg: #16311f; --ok-text: #a6e3b8; --hover: #2a2927;
   }
 }
 * { box-sizing: border-box; }
@@ -55,6 +55,7 @@ table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { font-size: 12px; font-weight: 600; color: var(--muted); }
 tr:last-child td { border-bottom: 0; }
+#hosts tr:hover td { background: var(--hover); }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; }

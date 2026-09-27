@@ -13,7 +13,7 @@ Metadata:
       - Label: { default: Network (must reach the managed hosts) }
         Parameters: [SubnetIds, SecurityGroupIds, AssignPublicIp]
       - Label: { default: Data and secrets mrsh may access }
-        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
+        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, CreateBackupBucket, BackupRetentionDays, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
       - Label: { default: Sizing and logs }
         Parameters: [TaskCpu, TaskMemory, LogRetentionDays]
 
@@ -42,15 +42,17 @@ Parameters:
     AllowedValues: [ENABLED, DISABLED]
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets with a route to the managed hosts and to S3/SSM/Secrets Manager (NAT or VPC endpoints).
+    Description: >-
+      Public subnets (internet gateway route) that also reach the managed hosts, e.g. over VPN/TGW routes
+      or the hosts' public IPs. With AssignPublicIp=DISABLED, use private subnets with NAT or VPC endpoints.
   SecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
-    Description: Must allow outbound SSH to the hosts and HTTPS to AWS APIs.
+    Description: Needs no inbound rules; allow outbound SSH to the hosts and HTTPS to AWS APIs and the registry.
   AssignPublicIp:
     Type: String
-    Default: DISABLED
-    AllowedValues: [DISABLED, ENABLED]
-    Description: ENABLED only for public subnets without NAT.
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: ENABLED gives the task a public IP in a public subnet, so no NAT gateway is needed (the cheapest setup).
   ConfigBucket:
     Type: String
     AllowedPattern: "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"
@@ -64,6 +66,16 @@ Parameters:
   BackupPrefix:
     Type: String
     Default: mrsh/backups/
+  CreateBackupBucket:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: true creates BackupBucket (private, SSE-S3, TLS only, retained on stack deletion) with an expiry rule.
+  BackupRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to keep objects under BackupPrefix when CreateBackupBucket=true (keep the config outside that prefix).
   SsmParameterPrefix:
     Type: String
     Default: ""
@@ -91,6 +103,7 @@ Parameters:
 
 Conditions:
   HasBackups: !Not [!Equals [!Ref BackupBucket, ""]]
+  CreateBucket: !And [!Condition HasBackups, !Equals [!Ref CreateBackupBucket, "true"]]
   HasSsm: !Not [!Equals [!Ref SsmParameterPrefix, ""]]
   HasSecrets: !Not [!Equals [!Ref SecretsManagerPrefix, ""]]
   HasKms: !Not [!Equals [!Ref KmsKeyArn, ""]]
@@ -103,6 +116,53 @@ Resources:
     Properties:
       LogGroupName: !Sub /mrsh/${AWS::StackName}
       RetentionInDays: !Ref LogRetentionDays
+
+  BackupBucketResource:
+    Type: AWS::S3::Bucket
+    Condition: CreateBucket
+    DeletionPolicy: Retain # backups outlive the stack
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BackupBucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-backups
+            Status: Enabled
+            Prefix: !Ref BackupPrefix
+            ExpirationInDays: !Ref BackupRetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateBucket
+    Properties:
+      Bucket: !Ref BackupBucketResource
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TLSOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt BackupBucketResource.Arn
+              - !Sub ${BackupBucketResource.Arn}/*
+            Condition:
+              Bool: { aws:SecureTransport: "false" }
 
   # What mrsh itself may touch, attached to the task role.
   AppPolicy:
@@ -283,6 +343,9 @@ Resources:
           MaximumRetryAttempts: 0 # a failed reboot or upgrade must not be replayed
 
 Outputs:
+  BackupBucketName:
+    Condition: CreateBucket
+    Value: !Ref BackupBucketResource
   LogGroupName:
     Value: !Ref LogGroup
   ScheduleArn:

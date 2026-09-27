@@ -82,7 +82,7 @@ docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp -e AWS_REGION=eu-west-1 \
 
 ## Scheduled runs on AWS
 
-`deploy/cloudformation.yaml` runs mrsh as an ECS Fargate task on an EventBridge Scheduler schedule. The task has no time limit and pulls the image from any registry, GHCR included. Its subnets must reach the managed hosts and the AWS APIs (NAT or VPC endpoints). The IAM policy covers only the config object and, when set, the backup prefix, SSM/Secrets Manager prefixes and one KMS key.
+`deploy/cloudformation.yaml` runs mrsh as an ECS Fargate task on an EventBridge Scheduler schedule. The task has no time limit and pulls the image from any registry, GHCR included. By default it gets a public IP in a public subnet, so it needs no NAT gateway; the subnet must still reach the managed hosts (VPN/TGW routes or their public IPs). With `AssignPublicIp=DISABLED`, use private subnets with NAT or VPC endpoints. The IAM policy covers only the config object and, when set, the backup prefix, SSM/Secrets Manager prefixes and one KMS key.
 
 ```bash
 aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM \
@@ -90,8 +90,18 @@ aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM
   ImageUri=ghcr.io/mbevc1/mrsh:0.1.0 \
   MrshArgs="-f,s3://my-bucket/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://my-bucket/mrsh/backups/" \
   ConfigBucket=my-bucket ConfigKey=mrsh/hosts.yaml BackupBucket=my-bucket \
+  CreateBackupBucket=true BackupRetentionDays=90 \
   SsmParameterPrefix=mrsh/ SubnetIds=subnet-aaa,subnet-bbb SecurityGroupIds=sg-ccc
 ```
+
+`CreateBackupBucket=true` creates `BackupBucket` (private, SSE-S3, TLS only, kept when the stack is deleted) with a rule that expires backups after `BackupRetentionDays`. Upload the config after the stack exists; it can live in the same bucket outside `BackupPrefix`.
+
+Cost:
+
+- **Network:** the public IP default avoids a NAT gateway (about $32 a month), by far the largest cost for a daily task. Compute is a few cents a month.
+- **Secrets:** SSM `SecureString` parameters are free; Secrets Manager costs $0.40 per secret per month.
+- **Encryption:** SSE-S3 and the `aws/ssm` key are free; a customer KMS key (`KmsKeyArn`) costs $1 a month plus requests.
+- **Storage:** backups are small, so keep them in S3 Standard; Standard-IA and Glacier bill each object as at least 128 KB.
 
 Things to know:
 

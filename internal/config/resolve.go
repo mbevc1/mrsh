@@ -15,6 +15,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+
+	"github.com/mbevc1/mrsh/internal/s3client"
 )
 
 // ssmBatchSize is the GetParameters limit per call.
@@ -283,7 +285,7 @@ func NewAWSBackend() AWSBackend {
 		ssm: map[string]*ssm.Client{},
 		sm:  map[string]*secretsmanager.Client{},
 		loadFn: func(ctx context.Context) (aws.Config, error) {
-			return awsconfig.LoadDefaultConfig(ctx)
+			return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithLogger(s3client.SDKLogger))
 		},
 	}
 }

@@ -15,14 +15,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/logging"
 )
+
+// SDKLogger sends the AWS SDK's own log lines (such as "Response has no
+// supported checksum") to slog at debug level instead of straight to stderr.
+var SDKLogger = logging.LoggerFunc(func(c logging.Classification, format string, v ...any) {
+	slog.Debug("aws sdk: "+fmt.Sprintf(format, v...), "class", string(c))
+})
 
 // New returns a client for bucket. When no region is configured
 // (AWS_REGION, profile), it asks S3 where the bucket lives. A custom
 // endpoint (AWS_ENDPOINT_URL_S3 or AWS_ENDPOINT_URL, e.g. MinIO) switches
 // to path-style addressing.
 func New(ctx context.Context, bucket string) (*s3.Client, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithLogger(SDKLogger))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

@@ -92,10 +92,10 @@ async function copyText(text, what) {
   toast(`Copied ${what}: ${text}`);
 }
 
-function copyButton(text, what) {
+function copyButton(text, what, title = `Copy ${what}`) {
   const b = document.createElement("button");
   b.type = "button"; b.className = "icon";
-  b.title = `Copy ${what}`;
+  b.title = title;
   b.setAttribute("aria-label", b.title);
   b.append(copyIcon());
   b.addEventListener("click", () => copyText(text, what));
@@ -181,9 +181,27 @@ function cell(text, cls) {
   return td;
 }
 
+const shellQuote = (s) => /^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`;
+
+// sshCommand builds the ssh invocation from the host's effective settings.
+// A user held in an env var or ARN is unresolved here, so it is left out;
+// passwords never appear (ssh takes none on the command line).
+function sshCommand(h, d) {
+  const user = h.user.kind !== "unset" ? h.user : d.user;
+  const port = h.port || d.port || 22;
+  const identity = h.identity_file || d.identity_file;
+  const args = ["ssh"];
+  if (port !== 22) args.push("-p", String(port));
+  if (identity) args.push("-i", shellQuote(identity));
+  args.push(user.kind === "plain" && user.value ? `${shellQuote(user.value)}@${h.host}` : h.host);
+  return { cmd: args.join(" "), userLeftOut: user.kind === "env" || user.kind === "arn" };
+}
+
 function hostCell(h) {
   const td = cell(h.host);
-  td.append(copyButton(h.host, `${h.name} address`));
+  const { cmd, userLeftOut } = sshCommand(h, state.cfg.defaults);
+  td.append(copyButton(cmd, `ssh command for ${h.name}`,
+    userLeftOut ? "Copy ssh command (user comes from an env var or ARN, so it is left out)" : "Copy ssh command"));
   return td;
 }
 

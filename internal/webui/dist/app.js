@@ -58,17 +58,18 @@ function toast(msg) {
 
 const clock = () => new Date().toLocaleTimeString();
 
-// copyIcon builds the two-squares glyph; SVG, since CSP forbids inline styles.
+// copyIcon builds the usual copy glyph: a full page in front of the visible
+// corner of one behind it. SVG, since CSP forbids inline styles.
 function copyIcon() {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
-  for (const [x, y] of [[8, 8], [4, 4]]) {
-    const r = document.createElementNS(ns, "rect");
-    for (const [k, v] of Object.entries({ x, y, width: 12, height: 12, rx: 2 })) r.setAttribute(k, v);
-    svg.append(r);
-  }
+  const front = document.createElementNS(ns, "rect");
+  for (const [k, v] of Object.entries({ x: 9, y: 9, width: 12, height: 12, rx: 2 })) front.setAttribute(k, v);
+  const back = document.createElementNS(ns, "path");
+  back.setAttribute("d", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1");
+  svg.append(front, back);
   return svg;
 }
 

@@ -28,7 +28,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
 | `hosts init\|example\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. |
 | `mt backup` | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
-| `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `--confirm`. |
+| `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` | Firmware and package versions across the fleet. |
 | `ui` | A local browser editor for the same config (loopback only; edits config, never runs commands). |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
@@ -106,7 +106,7 @@ Cost:
 Things to know:
 
 - **Paths:** use `s3://` for the config and backups; the container filesystem is read-only apart from `/tmp`.
-- **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `--confirm`.
+- **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `-y` / `--assume-yes`.
 - **No replays:** retries are off, so a failed reboot or upgrade is not repeated.
 - **Host keys:** `/tmp` does not survive between runs, so `accept-new` cannot remember hosts. For verified host keys, use `strict` with a `known_hosts` file baked into a derived image.
 

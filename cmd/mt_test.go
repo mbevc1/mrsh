@@ -205,7 +205,7 @@ func TestMtReboot(t *testing.T) {
 	}
 
 	// The dropped session counts as success.
-	out, err := execRoot(t, "-f", cfg, "mt", "reboot", "--confirm")
+	out, err := execRoot(t, "-f", cfg, "mt", "reboot", "-y")
 	if err != nil || !strings.Contains(out, "rebooting") || !f.sentContains(mt.RebootCmd) {
 		t.Errorf("reboot: err=%v\n%s", err, out)
 	}
@@ -217,7 +217,7 @@ func TestMtUpgradeInstallsPackages(t *testing.T) {
 		"installed-version: 7.13.2\nstatus: finding out latest version...\n",
 		"installed-version: 7.13.2\nlatest-version: 7.14\nstatus: New version is available\n",
 	}
-	out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "--confirm")
+	out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y")
 	if err != nil || !strings.Contains(out, "installing RouterOS 7.13.2 -> 7.14") {
 		t.Fatalf("err=%v\n%s", err, out)
 	}
@@ -240,7 +240,7 @@ func TestMtUpgradeDryRunOnlyChecks(t *testing.T) {
 
 func TestMtUpgradeFirmwareStep(t *testing.T) {
 	f, cfg := startRouter(t) // RouterOS current, firmware 7.13.2 -> 7.14 pending
-	out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "--confirm")
+	out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y")
 	if err != nil || !strings.Contains(out, "firmware 7.13.2 -> 7.14, rebooting") {
 		t.Fatalf("err=%v\n%s", err, out)
 	}
@@ -249,7 +249,7 @@ func TestMtUpgradeFirmwareStep(t *testing.T) {
 	}
 
 	f.rb = "current-firmware: 7.14\nupgrade-firmware: 7.14\n"
-	if out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "--confirm"); err != nil || !strings.Contains(out, "up to date (RouterOS 7.14)") {
+	if out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y"); err != nil || !strings.Contains(out, "up to date (RouterOS 7.14)") {
 		t.Errorf("up to date: err=%v\n%s", err, out)
 	}
 }
@@ -285,6 +285,15 @@ func TestHumanBytes(t *testing.T) {
 	} {
 		if got := humanBytes(n); got != want {
 			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestAssumeYesSpellings(t *testing.T) {
+	for _, flag := range []string{"-y", "--assume-yes", "--yes"} {
+		f, cfg := startRouter(t)
+		if out, err := execRoot(t, "-f", cfg, "mt", "reboot", flag); err != nil || !f.sentContains(mt.RebootCmd) {
+			t.Errorf("%s: err=%v\n%s", flag, err, out)
 		}
 	}
 }

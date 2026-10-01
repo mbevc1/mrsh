@@ -223,10 +223,9 @@ func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) 
 }
 
 func newMtRebootCmd(opts *globalOptions) *cobra.Command {
-	var confirm bool
 	cmd := &cobra.Command{
 		Use:   "reboot",
-		Short: "Reboot devices (asks for confirmation unless --confirm)",
+		Short: "Reboot devices (asks for confirmation unless -y/--assume-yes)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
@@ -236,7 +235,7 @@ func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 			if opts.dryRun {
 				return printDryRun(cmd.OutOrStdout(), targets, mt.RebootCmd, nil)
 			}
-			if !confirm {
+			if !opts.yes {
 				if err := confirmTargets(cmd, "reboot", targets); err != nil {
 					return err
 				}
@@ -259,7 +258,6 @@ func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 			return outcome(ctx, results)
 		},
 	}
-	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	return cmd
 }
 
@@ -278,7 +276,6 @@ func expectDisconnect(stdout, stderr string, code int, err error) error {
 }
 
 func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
-	var confirm bool
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Check and install RouterOS updates, then routerboard firmware",
@@ -295,7 +292,7 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			dry := opts.dryRun
-			if !dry && !confirm {
+			if !dry && !opts.yes {
 				if err := confirmTargets(cmd, "upgrade (and reboot)", targets); err != nil {
 					return err
 				}
@@ -319,7 +316,6 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 			return outcome(ctx, results)
 		},
 	}
-	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	return cmd
 }
 

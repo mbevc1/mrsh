@@ -92,7 +92,7 @@ func TestHostsMutationErrors(t *testing.T) {
 		{[]string{"hosts", "add", "--name", "x", "-H", "h", "--port", "70000"}, "out of range"},
 		{[]string{"hosts", "update", "--name", "nope", "-g", "x"}, "host not found"},
 		{[]string{"hosts", "update", "--name", "web01"}, "nothing to update"},
-		{[]string{"hosts", "remove", "--name", "nope", "--confirm"}, "host not found"},
+		{[]string{"hosts", "remove", "--name", "nope", "--assume-yes"}, "host not found"},
 	}
 	for _, tt := range tests {
 		_, err := execRoot(t, append([]string{"-f", path}, tt.args...)...)
@@ -104,8 +104,8 @@ func TestHostsMutationErrors(t *testing.T) {
 		t.Errorf("failed mutations changed the file:\n%s", after)
 	}
 
-	// remove --confirm deletes the right entry.
-	if _, err := execRoot(t, "-f", path, "hosts", "remove", "--name", "web01", "--confirm"); err != nil {
+	// remove --assume-yes deletes the right entry.
+	if _, err := execRoot(t, "-f", path, "hosts", "remove", "--name", "web01", "--assume-yes"); err != nil {
 		t.Fatal(err)
 	}
 	if c := loadFile(t, path); len(c.Hosts) != 1 || c.Hosts[0].Name != "web02" {

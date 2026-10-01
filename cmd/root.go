@@ -31,6 +31,7 @@ type globalOptions struct {
 	output       string
 	dryRun       bool
 	debug        bool
+	yes          bool
 
 	hostKeyPolicy    string
 	hostKeyPolicySet bool // chosen by flag or config, not the built-in default
@@ -112,6 +113,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.IntVarP(&opts.timeout, "timeout", "t", 30, "SSH timeout in seconds")
 	pf.StringVarP(&opts.output, "output", "o", "text", "output format: "+strings.Join(validOutputs, "|"))
 	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run without executing")
+	pf.BoolVarP(&opts.yes, "assume-yes", "y", false, "answer yes to confirmation prompts (alias --yes)")
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
 	pf.StringVar(&opts.hostKeyPolicy, "host-key-policy", config.HostKeyInsecure, "host key checking: strict|accept-new|insecure")
 	pf.StringVar(&opts.knownHosts, "known-hosts", "~/.ssh/known_hosts", "known_hosts file for strict/accept-new")
@@ -140,7 +142,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	return root, opts
 }
 
-var flagAliases = map[string]string{"hosts": "host"}
+var flagAliases = map[string]string{"hosts": "host", "yes": "assume-yes"}
 
 func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	if canonical, ok := flagAliases[name]; ok {

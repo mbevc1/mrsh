@@ -90,11 +90,13 @@ aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM
   ImageUri=ghcr.io/mbevc1/mrsh:0.1.0 \
   MrshArgs="-f,s3://my-bucket/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://my-bucket/mrsh/backups/" \
   ConfigBucket=my-bucket ConfigKey=mrsh/hosts.yaml BackupBucket=my-bucket \
-  CreateBackupBucket=true BackupRetentionDays=90 \
+  CreateBackupBucket=true BackupRetentionDays=90 NotificationEmail=ops@example.com \
   SsmParameterPrefix=mrsh/ SubnetIds=subnet-aaa,subnet-bbb SecurityGroupIds=sg-ccc
 ```
 
 `CreateBackupBucket=true` creates `BackupBucket` (private, SSE-S3, TLS only, kept when the stack is deleted) with a rule that expires backups after `BackupRetentionDays`. Upload the config after the stack exists; it can live in the same bucket outside `BackupPrefix`.
+
+`NotificationEmail` turns on failure emails: a run that exits non-zero (1: a host failed, 2: usage or config error), a task that fails to start, or a schedule that cannot launch one. Confirm the subscription email from AWS once. Successful runs send nothing. Slack or Teams can subscribe to the same SNS topic (output `NotificationTopicArn`) through Amazon Q Developer in chat applications.
 
 Cost:
 

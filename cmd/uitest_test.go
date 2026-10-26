@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
+	"syscall"
 	"testing"
 	"time"
 
@@ -95,6 +98,12 @@ func TestUIHostTest(t *testing.T) {
 		"down":  {false, "connection refused"},
 		"noenv": {false, "MRSH_TEST_UNSET_VAR"},
 	}
+	if s := got["down"].Summary; s != "connect: connection refused" {
+		t.Errorf("down summary = %q", s)
+	}
+	if s := got["rt1"].Summary; s != got["rt1"].Detail {
+		t.Errorf("ok summary %q != detail %q", s, got["rt1"].Detail)
+	}
 	for name, w := range want {
 		r := got[name]
 		if r.OK != w.ok || !bytes.Contains([]byte(r.Detail), []byte(w.detail)) {
@@ -120,4 +129,29 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestShortError(t *testing.T) {
+	opErr := func(errno syscall.Errno) error {
+		return fmt.Errorf("dial 10.0.0.1:22: %w", &net.OpError{Op: "dial", Net: "tcp",
+			Err: &os.SyscallError{Syscall: "connect", Err: errno}})
+	}
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{opErr(syscall.ECONNREFUSED), "connect: connection refused"},
+		{opErr(syscall.EHOSTUNREACH), "connect: no route to host"},
+		{fmt.Errorf("dial router.lan:22: %w", &net.DNSError{Err: "no such host", Name: "router.lan", IsNotFound: true}), "unknown host router.lan"},
+		{fmt.Errorf("connect 10.0.0.1:22: %w", context.DeadlineExceeded), "timed out"},
+		{errors.New("connect 10.0.0.1:22: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password], no supported methods remain"), "authentication failed"},
+		{errors.New("host rt2: pass_env: environment variable MRSH_X is unset or empty"), "environment variable MRSH_X is unset or empty"},
+		{errors.New("connect 10.0.0.1:22: ssh: handshake failed: host 10.0.0.1:22 is not in /k (add it with ssh-keyscan, or use --host-key-policy accept-new)"), "host 10.0.0.1:22 is not in /k"},
+		{errors.New("plain"), "plain"},
+	}
+	for _, tt := range tests {
+		if got := shortError(tt.err); got != tt.want {
+			t.Errorf("shortError(%q) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
 }

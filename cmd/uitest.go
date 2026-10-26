@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +50,7 @@ func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
 		for i := range targets {
 			results[i] = webui.TestResult{Name: targets[i].Name, Host: targets[i].Host.Host}
 			if err := runner.Resolve(ctx, resolver, targets[i:i+1]); err != nil {
-				results[i].Detail = err.Error()
+				results[i].Summary, results[i].Detail = shortError(err), err.Error()
 				continue
 			}
 			ready = append(ready, targets[i])
@@ -62,15 +65,46 @@ func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
 			out.DurationMS = r.Duration.Milliseconds()
 			switch v, ok := r.Data.(mt.Version); {
 			case r.Err != nil:
-				out.Detail = strings.ReplaceAll(r.Err.Error(), "\n", " ")
+				out.Summary, out.Detail = shortError(r.Err), strings.ReplaceAll(r.Err.Error(), "\n", " ")
 			case ok:
 				out.OK, out.Detail = true, describeVersion(v)
 			default:
 				out.OK, out.Detail = true, "connected (not RouterOS)"
 			}
+			if out.OK {
+				out.Summary = out.Detail
+			}
 		}
 		return results, nil
 	}
+}
+
+// shortError reduces a wrapped error to its cause for the UI badge, e.g.
+// "dial 10.0.0.1:22: dial tcp 10.0.0.1:22: connect: no route to host"
+// becomes "connect: no route to host". The full text stays in Detail.
+func shortError(err error) string {
+	var sys *os.SyscallError
+	var dns *net.DNSError
+	switch {
+	case errors.As(err, &sys):
+		return sys.Syscall + ": " + sys.Err.Error()
+	case errors.As(err, &dns) && dns.IsNotFound:
+		return "unknown host " + dns.Name
+	case errors.As(err, &dns):
+		return "lookup " + dns.Name + ": " + dns.Err
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return "timed out"
+	case strings.Contains(err.Error(), "unable to authenticate"):
+		return "authentication failed"
+	}
+	s := err.Error()
+	if i := strings.LastIndex(s, ": "); i >= 0 {
+		s = s[i+2:] // the innermost wrapped message
+	}
+	if i := strings.Index(s, " ("); i > 0 {
+		s = s[:i] // drop a trailing hint such as "(add it with ssh-keyscan, …)"
+	}
+	return s
 }
 
 // namedTargets returns the effective config entries for names, in config

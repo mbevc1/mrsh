@@ -13,7 +13,8 @@ type TestResult struct {
 	Name       string `json:"name"`
 	Host       string `json:"host"`
 	OK         bool   `json:"ok"`
-	Detail     string `json:"detail"`
+	Summary    string `json:"summary"` // short form for the badge, e.g. "connect: no route to host"
+	Detail     string `json:"detail"`  // full message, shown on hover
 	DurationMS int64  `json:"duration_ms"`
 }
 

@@ -1,7 +1,9 @@
 // Package webui serves the loopback config editor for `mrsh ui`.
 //
-// The server only edits config: it never resolves secrets, opens SSH
-// connections or runs commands. Binding to loopback does not stop web pages
+// The server edits config. Its one exception is POST /api/test, which (when
+// the command wires up a Tester) connects to saved hosts and runs a fixed,
+// read-only version check; it never runs user-supplied commands and cannot
+// reach addresses that are not saved hosts. Binding to loopback does not stop web pages
 // in the user's own browser from sending it requests, so every API call
 // must carry a per-launch token in a custom header (which cross-site pages
 // cannot set without a CORS preflight this server never grants), the Host
@@ -38,6 +40,7 @@ const TokenHeader = "X-Mrsh-Token"
 type Server struct {
 	Store config.ConfigStore
 	Token string
+	Test  Tester // nil disables /api/test
 	addr  string // host:port actually bound
 
 	quitMu   sync.Mutex

@@ -14,7 +14,7 @@ const token = (() => {
 })();
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const state = { version: "", cfg: null, editing: null };
+const state = { version: "", cfg: null, editing: null, tests: {} }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -29,7 +29,7 @@ async function api(method, path, body) {
   if (body !== undefined) headers["Content-Type"] = "application/json";
   // Every write carries the version this page loaded, so a stale tab
   // cannot overwrite a newer change.
-  if (method !== "GET" && path !== "/api/validate") headers["If-Match"] = state.version;
+  if (method !== "GET" && path !== "/api/validate" && path !== "/api/test") headers["If-Match"] = state.version;
   const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new APIError(res.status, data);
@@ -45,9 +45,10 @@ function banner(msg) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, failed = false) {
   const t = $("#toast");
   t.textContent = msg;
+  t.classList.toggle("fail", failed);
   t.hidden = false;
   t.classList.remove("show");
   void t.offsetWidth; // restart the fade-in when toasts follow each other
@@ -220,9 +221,81 @@ function render() {
   }
   filter.value = cfg.groups.includes(current) ? current : "";
 
+  const testGroup = $("#test-group");
+  const testCurrent = testGroup.value;
+  testGroup.replaceChildren(new Option("All groups", ""), ...cfg.groups.map((g) => new Option(g, g)));
+  testGroup.value = cfg.groups.includes(testCurrent) ? testCurrent : "";
+  const names = new Set(cfg.hosts.map((h) => h.name));
+  for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
+
   renderHosts();
+  renderTests();
   renderDefaults();
   $("#commands").value = cfg.commands.join("\n");
+}
+
+// statusBadge shows a host's last test result, or nothing before a test.
+function statusBadge(name) {
+  const r = state.tests[name];
+  const span = document.createElement("span");
+  if (!r) return span;
+  if (r.running) {
+    span.className = "badge running"; span.textContent = "testing…";
+  } else {
+    span.className = r.ok ? "badge ok" : "badge fail";
+    span.textContent = `${r.ok ? "✓" : "✗"} ${r.detail}`;
+    span.title = r.detail;
+  }
+  return span;
+}
+
+function statusCell(name) {
+  const td = document.createElement("td");
+  td.className = "status";
+  td.append(statusBadge(name));
+  return td;
+}
+
+// runTests asks the server to connect to the named saved hosts.
+async function runTests(names, btn) {
+  if (!names.length) return;
+  for (const n of names) state.tests[n] = { running: true };
+  renderHosts(); renderTests();
+  await busy(btn, "Testing…", async () => {
+    try {
+      const { results } = await api("POST", "/api/test", { hosts: names });
+      for (const r of results) state.tests[r.name] = { ok: r.ok, detail: r.detail, ms: r.duration_ms };
+      const ok = results.filter((r) => r.ok).length;
+      toast(results.length === 1 ? `${results[0].name}: ${results[0].detail}` : `${ok} of ${results.length} hosts OK`,
+        ok < results.length);
+    } catch (err) {
+      for (const n of names) delete state.tests[n];
+      banner(`Test failed: ${err.message}`);
+    }
+  });
+  renderHosts(); renderTests();
+}
+
+function testNames() {
+  const group = $("#test-group").value;
+  return state.cfg.hosts.filter((h) => !group || h.group === group).map((h) => h.name);
+}
+
+function renderTests() {
+  const names = new Set(testNames());
+  const tbody = $("#test-rows");
+  tbody.replaceChildren();
+  for (const h of state.cfg.hosts.filter((h) => names.has(h.name))) {
+    const r = state.tests[h.name];
+    const result = r ? statusCell(h.name) : cell("not tested", "muted");
+    // A host that failed before connecting (e.g. an unset env var) has no time.
+    const ms = r && !r.running && r.ms > 0 ? (r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(1)} s`) : "";
+    const tr = document.createElement("tr");
+    tr.append(cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"), result, cell(ms, "num"));
+    tbody.append(tr);
+  }
+  $("#test-count").textContent = `${names.size} host${names.size === 1 ? "" : "s"}`;
+  $("#test-run").disabled = names.size === 0;
 }
 
 function renderHosts() {
@@ -241,16 +314,21 @@ function renderHosts() {
       cell(h.group || "-", h.group ? "" : "muted"),
       cell(secretText(h.user) || "default", "ref"), cell(secretText(h.pass) || "default", "ref"),
       cell(h.identity_file || "default", h.identity_file ? "ref" : "muted"),
+      statusCell(h.name),
     );
     const actions = document.createElement("td");
     actions.className = "actions";
+    const test = document.createElement("button");
+    test.type = "button"; test.className = "link"; test.textContent = "Test";
+    test.title = "Connect and run a read-only version check";
+    test.addEventListener("click", () => runTests([h.name], test));
     const edit = document.createElement("button");
     edit.type = "button"; edit.className = "link"; edit.textContent = "Edit";
     edit.addEventListener("click", () => openEditor(h));
     const del = document.createElement("button");
     del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
     del.addEventListener("click", () => removeHost(h, del));
-    actions.append(edit, del);
+    actions.append(test, edit, del);
     tr.append(actions);
     tbody.append(tr);
   }
@@ -336,6 +414,8 @@ async function saveHost(ev) {
       if (editing) await api("PUT", `/api/hosts/${encodeURIComponent(editing)}`, host);
       else await api("POST", "/api/hosts", host);
       $("#editor").close();
+      delete state.tests[host.name]; // an earlier result no longer describes this entry
+      if (editing) delete state.tests[editing];
       await load();
       toast(editing ? `Saved ${host.name}` : `Added ${host.name}`);
     } catch (err) {
@@ -405,7 +485,7 @@ async function saveCommands(ev) {
 
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["hosts", "defaults", "commands"]) $(`#tab-${t}`).hidden = t !== name;
+  for (const t of ["hosts", "defaults", "commands", "test"]) $(`#tab-${t}`).hidden = t !== name;
 }
 
 let heartbeatTimer;
@@ -453,6 +533,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#commands-form").addEventListener("submit", saveCommands);
   $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
+  $("#test-group").addEventListener("change", renderTests);
+  $("#test-run").addEventListener("click", () => runTests(testNames(), $("#test-run")));
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

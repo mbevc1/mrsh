@@ -36,6 +36,7 @@ button:disabled { opacity: 0.6; cursor: progress; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10;
   background: var(--ok-bg); color: var(--ok-text); border: 1px solid var(--line);
   padding: 8px 16px; border-radius: var(--radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); }
+.toast.fail { background: var(--warn-bg); color: var(--danger); }
 .toast.show { animation: toast-in 150ms ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
 @media (prefers-reduced-motion: reduce) { .toast.show { animation: none; } }
@@ -59,6 +60,11 @@ tr:last-child td { border-bottom: 0; }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; }
+.badge { display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+  padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+.badge.ok { background: var(--ok-bg); color: var(--ok-text); }
+.badge.fail { background: var(--warn-bg); color: var(--danger); }
+.badge.running { color: var(--muted); }
 .muted { color: var(--muted); }
 .empty, .hint { color: var(--muted); }
 .grid-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; max-width: 760px; }

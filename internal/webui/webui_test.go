@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -449,5 +450,38 @@ func TestServeStopsOnShutdownRequest(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return after shutdown request")
+	}
+}
+
+func TestTestHostsRoute(t *testing.T) {
+	f := newFixture(t)
+	if w, _ := f.do("POST", "/api/test", `{"hosts":[]}`); w.Code != http.StatusNotImplemented {
+		t.Errorf("no tester: %d", w.Code)
+	}
+
+	var gotNames []string
+	f.srv.Test = func(_ context.Context, names []string) ([]TestResult, error) {
+		gotNames = names
+		if len(names) == 1 && names[0] == "ghost" {
+			return nil, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
+		}
+		return []TestResult{{Name: "web01", Host: "10.0.0.1", OK: true, Detail: "RouterOS 7.14"}}, nil
+	}
+	f.h = f.srv.Handler()
+	w, out := f.do("POST", "/api/test", `{"hosts":["web01"]}`)
+	if w.Code != 200 || len(gotNames) != 1 || gotNames[0] != "web01" {
+		t.Fatalf("test: %d %s names=%v", w.Code, w.Body, gotNames)
+	}
+	if rs := out["results"].([]any); rs[0].(map[string]any)["detail"] != "RouterOS 7.14" {
+		t.Errorf("results = %v", rs)
+	}
+	if w, _ := f.do("POST", "/api/test", `{"hosts":["ghost"]}`); w.Code != http.StatusNotFound {
+		t.Errorf("unknown host: %d", w.Code)
+	}
+	if w, _ := f.do("POST", "/api/test", `{"hosts":[]}`, header(TokenHeader, "")); w.Code != http.StatusUnauthorized {
+		t.Errorf("no token: %d", w.Code)
+	}
+	if w, _ := f.do("POST", "/api/test", `hosts=web01`, header("Content-Type", "application/x-www-form-urlencoded")); w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("form body: %d", w.Code)
 	}
 }

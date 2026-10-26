@@ -30,7 +30,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `mt backup` | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` | Firmware and package versions across the fleet. |
-| `ui` | A local browser editor for the same config (loopback only; edits config, never runs commands). |
+| `ui` | A local browser editor for the same config (loopback only). Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts); it runs no other commands. |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 

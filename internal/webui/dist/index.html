@@ -22,6 +22,7 @@
   <button type="button" role="tab" data-tab="hosts" aria-selected="true">Hosts</button>
   <button type="button" role="tab" data-tab="defaults">Defaults</button>
   <button type="button" role="tab" data-tab="commands">Commands</button>
+  <button type="button" role="tab" data-tab="test">Test</button>
 </nav>
 <section id="stopped" class="stopped" hidden>
   <h1>mrsh ui has stopped</h1>
@@ -37,7 +38,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th>Status</th><th></th></tr></thead>
         <tbody id="hosts"></tbody>
       </table>
     </div>
@@ -63,6 +64,21 @@
       <ul class="errors wide" id="defaults-errors"></ul>
       <div class="actions wide"><button type="submit">Save defaults</button></div>
     </form>
+  </section>
+
+  <section id="tab-test" hidden>
+    <p class="hint">Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</p>
+    <div class="toolbar">
+      <select id="test-group" aria-label="Hosts to test"><option value="">All groups</option></select>
+      <button id="test-run" type="button">Test hosts</button>
+      <span class="count" id="test-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Host</th><th>Group</th><th>Result</th><th>Time</th></tr></thead>
+        <tbody id="test-rows"></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="tab-commands" hidden>

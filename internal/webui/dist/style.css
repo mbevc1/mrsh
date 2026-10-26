@@ -61,6 +61,10 @@ td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: 
 td.num { font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; }
 /* Reserve the status column up front, so a result does not resize the table. */
+/* Fixed layout: column widths come from the header, never from results. */
+.test-table { table-layout: fixed; }
+.test-table td { overflow: hidden; text-overflow: ellipsis; }
+.test-table th.time { width: 90px; }
 th.status, td.status { width: 304px; min-width: 304px; max-width: 304px; overflow: hidden; } /* 280px badge + 2 × 12px padding */
 .badge { display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
   padding: 1px 8px; border-radius: 999px; font-size: 12px; }

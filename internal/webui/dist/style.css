@@ -60,7 +60,9 @@ tr:last-child td { border-bottom: 0; }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; }
-.badge { display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+/* Reserve the status column up front, so a result does not resize the table. */
+th.status, td.status { width: 260px; min-width: 260px; max-width: 260px; overflow: hidden; }
+.badge { display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
   padding: 1px 8px; border-radius: 999px; font-size: 12px; }
 .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
 .badge.fail { background: var(--warn-bg); color: var(--danger); }

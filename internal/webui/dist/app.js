@@ -287,7 +287,7 @@ function renderTests() {
   tbody.replaceChildren();
   for (const h of state.cfg.hosts.filter((h) => names.has(h.name))) {
     const r = state.tests[h.name];
-    const result = r ? statusCell(h.name) : cell("not tested", "muted");
+    const result = r ? statusCell(h.name) : cell("not tested", "status muted");
     // A host that failed before connecting (e.g. an unset env var) has no time.
     const ms = r && !r.running && r.ms > 0 ? (r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(1)} s`) : "";
     const tr = document.createElement("tr");

@@ -90,12 +90,15 @@
     <p class="hint">Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</p>
     <div class="toolbar">
       <select id="test-group" aria-label="Hosts to test"><option value="">All groups</option></select>
-      <button id="test-run" type="button">Test hosts</button>
+      <button id="test-run" type="button">Test selected</button>
       <span class="count" id="test-count"></span>
     </div>
     <div class="table-wrap">
       <table class="test-table">
-        <thead><tr><th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th></tr></thead>
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="test-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
         <tbody id="test-rows"></tbody>
       </table>
     </div>

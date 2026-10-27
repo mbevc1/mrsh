@@ -14,7 +14,9 @@ const token = (() => {
 })();
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set() }; // tests: name -> {ok, detail, ms} or {running}
+// picked: hosts ticked for upgrade (opt-in, as upgrades reboot devices);
+// testSkipped: hosts unticked for testing (opt-out, so all are tested by default).
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set() }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -236,6 +238,7 @@ function render() {
   for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
   for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
   for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
+  for (const n of state.testSkipped) if (!names.has(n)) state.testSkipped.delete(n);
 
   renderCredentials(); // first: fills the credential dropdowns the editors read
   renderHosts();
@@ -286,26 +289,17 @@ function renderUpgrades() {
   tbody.replaceChildren();
   for (const h of state.cfg.hosts.filter((h) => shown.includes(h.name))) {
     const r = state.upgrades[h.name];
-    const pick = document.createElement("input");
-    pick.type = "checkbox"; pick.checked = state.picked.has(h.name);
-    pick.setAttribute("aria-label", `Select ${h.name}`);
-    pick.addEventListener("change", () => {
-      if (pick.checked) state.picked.add(h.name); else state.picked.delete(h.name);
+    const pick = pickCell(h.name, state.picked.has(h.name), (on) => {
+      if (on) state.picked.add(h.name); else state.picked.delete(h.name);
       renderUpgrades();
     });
-    const pickCell = document.createElement("td");
-    pickCell.className = "check";
-    pickCell.append(pick);
     const tr = document.createElement("tr");
-    tr.append(pickCell, cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"),
+    tr.append(pick, cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"),
       r ? statusCell(h.name, state.upgrades) : cell("", "status"), cell(fmtMs(r), "num"));
     tbody.append(tr);
   }
   const picked = shown.filter((n) => state.picked.has(n));
-  $("#upgrade-all").checked = shown.length > 0 && picked.length === shown.length;
-  $("#upgrade-all").indeterminate = picked.length > 0 && picked.length < shown.length;
-  $("#upgrade-count").textContent = `${picked.length} of ${shown.length} selected`;
-  $("#upgrade-run").disabled = $("#upgrade-dry").disabled = picked.length === 0;
+  syncSelection($("#upgrade-all"), $("#upgrade-count"), [$("#upgrade-run"), $("#upgrade-dry")], picked.length, shown.length);
 }
 
 // runUpgrades runs the `mt upgrade` step (or its dry run) on the ticked hosts.
@@ -354,6 +348,30 @@ async function runTests(names, btn) {
   renderHosts(); renderTests();
 }
 
+// pickCell is a row's selection checkbox; onChange gets the new state.
+function pickCell(name, checked, onChange) {
+  const pick = document.createElement("input");
+  pick.type = "checkbox"; pick.checked = checked;
+  pick.setAttribute("aria-label", `Select ${name}`);
+  pick.addEventListener("change", () => onChange(pick.checked));
+  const td = document.createElement("td");
+  td.className = "check";
+  td.append(pick);
+  return td;
+}
+
+// syncSelection updates a select-all box, count label and action buttons.
+function syncSelection(allBox, count, buttons, selected, shown) {
+  allBox.checked = shown > 0 && selected === shown;
+  allBox.indeterminate = selected > 0 && selected < shown;
+  count.textContent = `${selected} of ${shown} selected`;
+  for (const b of buttons) b.disabled = selected === 0;
+}
+
+function selectedTests() {
+  return testNames().filter((n) => !state.testSkipped.has(n));
+}
+
 function testNames() {
   const group = $("#test-group").value;
   return state.cfg.hosts.filter((h) => !group || h.group === group).map((h) => h.name);
@@ -369,11 +387,14 @@ function renderTests() {
     // A host that failed before connecting (e.g. an unset env var) has no time.
     const ms = fmtMs(r);
     const tr = document.createElement("tr");
-    tr.append(cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"), result, cell(ms, "num"));
+    const pick = pickCell(h.name, !state.testSkipped.has(h.name), (on) => {
+      if (on) state.testSkipped.delete(h.name); else state.testSkipped.add(h.name);
+      renderTests();
+    });
+    tr.append(pick, cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"), result, cell(ms, "num"));
     tbody.append(tr);
   }
-  $("#test-count").textContent = `${names.size} host${names.size === 1 ? "" : "s"}`;
-  $("#test-run").disabled = names.size === 0;
+  syncSelection($("#test-all"), $("#test-count"), [$("#test-run")], selectedTests().length, names.size);
 }
 
 function renderHosts() {
@@ -709,7 +730,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#upgrade-dry").addEventListener("click", () => runUpgrades(false));
   $("#upgrade-run").addEventListener("click", () => runUpgrades(true));
-  $("#test-run").addEventListener("click", () => runTests(testNames(), $("#test-run")));
+  $("#test-all").addEventListener("change", (e) => {
+    for (const n of testNames()) if (e.target.checked) state.testSkipped.delete(n); else state.testSkipped.add(n);
+    renderTests();
+  });
+  $("#test-run").addEventListener("click", () => runTests(selectedTests(), $("#test-run")));
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

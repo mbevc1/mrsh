@@ -28,9 +28,17 @@ var ErrSOPSEncrypted = errors.New("config appears to be SOPS-encrypted; encrypte
 
 // Config is the parsed hosts.yaml.
 type Config struct {
-	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
-	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
-	Hosts    []Host   `yaml:"hosts" json:"hosts"`
+	Defaults    Defaults                 `yaml:"defaults,omitempty" json:"defaults"`
+	Credentials map[string]CredentialSet `yaml:"credentials,omitempty" json:"credentials,omitempty"`
+	Commands    []string                 `yaml:"commands,omitempty" json:"commands,omitempty"`
+	Hosts       []Host                   `yaml:"hosts" json:"hosts"`
+}
+
+// CredentialSet is a named, reusable login: hosts and defaults reference it
+// with `credential: NAME`. Fields a host sets itself override the set's.
+type CredentialSet struct {
+	Credentials  `yaml:",inline"`
+	IdentityFile string `yaml:"identity_file,omitempty" json:"identity_file,omitempty"`
 }
 
 // Credentials holds the user and pass field-groups shared by Defaults and Host.
@@ -46,6 +54,7 @@ type Credentials struct {
 
 // Defaults apply to every host that does not override them.
 type Defaults struct {
+	Credential    string `yaml:"credential,omitempty" json:"credential,omitempty"`
 	Credentials   `yaml:",inline"`
 	Port          int    `yaml:"port,omitempty" json:"port,omitempty"`
 	Timeout       int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`
@@ -63,6 +72,7 @@ type Host struct {
 	Host         string `yaml:"host" json:"host"`
 	Group        string `yaml:"group,omitempty" json:"group,omitempty"`
 	Port         int    `yaml:"port,omitempty" json:"port,omitempty"`
+	Credential   string `yaml:"credential,omitempty" json:"credential,omitempty"`
 	Credentials  `yaml:",inline"`
 	IdentityFile string `yaml:"identity_file,omitempty" json:"identity_file,omitempty"`
 	KnownHosts   string `yaml:"known_hosts,omitempty" json:"known_hosts,omitempty"`
@@ -108,9 +118,27 @@ func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 
+	for _, name := range sortedKeys(c.Credentials) {
+		set := c.Credentials[name]
+		label := "credential " + name
+		if err := validName(name); err != nil {
+			label = fmt.Sprintf("credential %q", name)
+			add("%s: name %v", label, err)
+		}
+		for _, e := range set.validate() {
+			add("%s: %v", label, e)
+		}
+		if set.UserRef().Kind() == KindUnset && set.PassRef().Kind() == KindUnset && set.IdentityFile == "" {
+			add("%s: set at least one of user, pass or identity_file", label)
+		}
+	}
+
 	d := c.Defaults
 	for _, e := range d.validate() {
 		add("defaults: %v", e)
+	}
+	if err := c.checkCredentialRef(d.Credential); err != nil {
+		add("defaults: %v", err)
 	}
 	if !validPort(d.Port) {
 		add("defaults: port %d out of range 1-65535", d.Port)
@@ -139,8 +167,8 @@ func (c *Config) Validate() error {
 		switch {
 		case h.Name == "":
 			add("%s: name is required", label)
-		case strings.ContainsAny(h.Name, " \t/"):
-			add("%s: name must not contain whitespace or '/'", label)
+		case validName(h.Name) != nil:
+			add("%s: name %v", label, validName(h.Name))
 		default:
 			if prev, dup := seen[h.Name]; dup {
 				add("%s: duplicate name (also host #%d)", label, prev)
@@ -157,8 +185,45 @@ func (c *Config) Validate() error {
 		for _, e := range h.validate() {
 			add("%s: %v", label, e)
 		}
+		if err := c.checkCredentialRef(h.Credential); err != nil {
+			add("%s: %v", label, err)
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// validName checks a host or credential set name.
+func validName(n string) error {
+	if strings.ContainsAny(n, " \t/") {
+		return errors.New("must not contain whitespace or '/'")
+	}
+	return nil
+}
+
+// checkCredentialRef reports a credential reference naming no set.
+func (c *Config) checkCredentialRef(name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, ok := c.Credentials[name]; !ok {
+		return fmt.Errorf("credential %q is not defined under credentials", name)
+	}
+	return nil
+}
+
+// CredentialUsers returns who references the named set: host names in
+// config order, plus "defaults".
+func (c *Config) CredentialUsers(name string) []string {
+	var users []string
+	if c.Defaults.Credential == name {
+		users = append(users, "defaults")
+	}
+	for _, h := range c.Hosts {
+		if h.Credential == name {
+			users = append(users, h.Name)
+		}
+	}
+	return users
 }
 
 // validPort accepts 0 (unset) or a TCP port.
@@ -203,8 +268,11 @@ func (c Credentials) PassRef() SecretRef {
 	return SecretRef{Field: "pass", Literal: c.Pass, Env: c.PassEnv, ARN: c.PassARN}
 }
 
-// Effective returns h with defaults applied. A host that sets any variant of
-// a field-group (user*, pass*) replaces the defaults' whole group.
+// Effective returns h with credential sets and defaults applied. Each of
+// user, pass and identity_file comes from the first place that sets it: the
+// host itself, the host's credential set, defaults, then the defaults'
+// credential set. Setting any variant of user* (or pass*) takes that whole
+// field-group from that place.
 func (c *Config) Effective(h Host) Host {
 	d := c.Defaults
 	if h.Port == 0 {
@@ -213,14 +281,17 @@ func (c *Config) Effective(h Host) Host {
 	if h.Port == 0 {
 		h.Port = DefaultPort
 	}
-	if h.UserRef().Kind() == KindUnset {
-		h.User, h.UserEnv, h.UserARN = d.User, d.UserEnv, d.UserARN
-	}
-	if h.PassRef().Kind() == KindUnset {
-		h.Pass, h.PassEnv, h.PassARN = d.Pass, d.PassEnv, d.PassARN
-	}
-	if h.IdentityFile == "" {
-		h.IdentityFile = d.IdentityFile
+	hostSet, defSet := c.Credentials[h.Credential], c.Credentials[d.Credential]
+	for _, src := range []CredentialSet{hostSet, {Credentials: d.Credentials, IdentityFile: d.IdentityFile}, defSet} {
+		if h.UserRef().Kind() == KindUnset {
+			h.User, h.UserEnv, h.UserARN = src.User, src.UserEnv, src.UserARN
+		}
+		if h.PassRef().Kind() == KindUnset {
+			h.Pass, h.PassEnv, h.PassARN = src.Pass, src.PassEnv, src.PassARN
+		}
+		if h.IdentityFile == "" {
+			h.IdentityFile = src.IdentityFile
+		}
 	}
 	if h.KnownHosts == "" {
 		h.KnownHosts = d.KnownHosts

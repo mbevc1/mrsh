@@ -11,10 +11,12 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// ErrHostExists and ErrHostNotFound report name clashes in mutations.
+// ErrHostExists and ErrHostNotFound report name clashes in mutations;
+// ErrCredentialNotFound reports a missing credential set.
 var (
-	ErrHostExists   = errors.New("host already exists")
-	ErrHostNotFound = errors.New("host not found")
+	ErrHostExists         = errors.New("host already exists")
+	ErrHostNotFound       = errors.New("host not found")
+	ErrCredentialNotFound = errors.New("credential set not found")
 )
 
 // Document is a config held as a YAML node tree, so mutations keep the
@@ -138,6 +140,72 @@ func (d *Document) RemoveHost(name string) error {
 	}
 	seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
 	return nil
+}
+
+// credentials returns the top-level credentials mapping, or nil when absent.
+func (d *Document) credentials() (*yaml.Node, error) {
+	m := d.root.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "credentials" {
+			if c := m.Content[i+1]; c.Kind == yaml.MappingNode {
+				return c, nil
+			}
+			return nil, errors.New("config: credentials must be a mapping of name to set")
+		}
+	}
+	return nil, nil
+}
+
+// SetCredential adds or replaces the named credential set, keeping the
+// comments and position of an existing one. A new credentials section goes
+// after defaults.
+func (d *Document) SetCredential(name string, set CredentialSet) error {
+	var n yaml.Node
+	if err := n.Encode(set); err != nil {
+		return err
+	}
+	creds, err := d.credentials()
+	if err != nil {
+		return err
+	}
+	if creds == nil {
+		creds = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if err := d.setTop("credentials", creds, 1); err != nil {
+			return err
+		}
+	}
+	for i := 0; i+1 < len(creds.Content); i += 2 {
+		if creds.Content[i].Value == name {
+			old := creds.Content[i+1]
+			n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			creds.Content[i+1] = &n
+			return nil
+		}
+	}
+	creds.Style = 0
+	creds.Content = append(creds.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, &n)
+	return nil
+}
+
+// RemoveCredential deletes the named set, and the credentials section once
+// it is empty. References to it are left for Validate to report.
+func (d *Document) RemoveCredential(name string) error {
+	creds, err := d.credentials()
+	if err != nil {
+		return err
+	}
+	if creds != nil {
+		for i := 0; i+1 < len(creds.Content); i += 2 {
+			if creds.Content[i].Value == name {
+				creds.Content = append(creds.Content[:i], creds.Content[i+2:]...)
+				if len(creds.Content) == 0 {
+					d.deleteTop("credentials")
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrCredentialNotFound, name)
 }
 
 // Bytes encodes the document.

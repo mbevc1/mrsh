@@ -1,9 +1,10 @@
 // Package webui serves the loopback config editor for `mrsh ui`.
 //
-// The server edits config. Its one exception is POST /api/test, which (when
-// the command wires up a Tester) connects to saved hosts and runs a fixed,
-// read-only version check; it never runs user-supplied commands and cannot
-// reach addresses that are not saved hosts. Binding to loopback does not stop web pages
+// The server edits config. Beyond that, when the command wires them up, it
+// connects to saved hosts for two fixed actions: POST /api/test (a read-only
+// version check) and POST /api/upgrade/{dry,apply} (the `mt upgrade` step,
+// which reboots devices; apply needs "confirm": true). It never runs
+// user-supplied commands and cannot reach addresses that are not saved hosts. Binding to loopback does not stop web pages
 // in the user's own browser from sending it requests, so every API call
 // must carry a per-launch token in a custom header (which cross-site pages
 // cannot set without a CORS preflight this server never grants), the Host
@@ -38,10 +39,11 @@ const TokenHeader = "X-Mrsh-Token"
 
 // Server is one `mrsh ui` session.
 type Server struct {
-	Store config.ConfigStore
-	Token string
-	Test  Tester // nil disables /api/test
-	addr  string // host:port actually bound
+	Store   config.ConfigStore
+	Token   string
+	Test    Tester    // nil disables /api/test
+	Upgrade *Upgrader // nil disables /api/upgrade/*
+	addr    string    // host:port actually bound
 
 	quitMu   sync.Mutex
 	quit     chan struct{} // closed when the page asks the server to exit

@@ -23,6 +23,7 @@
   <button type="button" role="tab" data-tab="defaults">Defaults</button>
   <button type="button" role="tab" data-tab="commands">Commands</button>
   <button type="button" role="tab" data-tab="test">Test</button>
+  <button type="button" role="tab" data-tab="upgrade">Upgrade</button>
 </nav>
 <section id="stopped" class="stopped" hidden>
   <h1>mrsh ui has stopped</h1>
@@ -77,6 +78,25 @@
       <table class="test-table">
         <thead><tr><th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th></tr></thead>
         <tbody id="test-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-upgrade" hidden>
+    <p class="hint warn">Upgrade runs the same step as <code>mrsh mt upgrade</code> on each ticked device: install a newer RouterOS, otherwise upgrade routerboard firmware, then reboot. Run it again after devices come back to take the next step. Dry run only reports what it would do.</p>
+    <div class="toolbar">
+      <select id="upgrade-group" aria-label="Hosts to upgrade"><option value="">All groups</option></select>
+      <button id="upgrade-dry" type="button" class="ghost">Dry run</button>
+      <button id="upgrade-run" type="button" class="danger-fill">Upgrade selected</button>
+      <span class="count" id="upgrade-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="test-table">
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="upgrade-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
+        <tbody id="upgrade-rows"></tbody>
       </table>
     </div>
   </section>

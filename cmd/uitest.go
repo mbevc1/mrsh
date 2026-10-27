@@ -22,61 +22,147 @@ import (
 // minTestParallel keeps a "test all" in the UI quick even with --parallel 1.
 const minTestParallel = 10
 
-// hostTester backs the UI's Test button: it reloads the saved config (so
-// defaults edited in the UI apply), then connects to each named host and
-// runs the RouterOS version check. A host that answers but is not RouterOS
-// still passes as "connected".
-func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
-	var mu sync.Mutex // loadConfig writes the resolved defaults into opts
-	return func(ctx context.Context, names []string) ([]webui.TestResult, error) {
-		mu.Lock()
-		lc, err := loadConfig(cmd, opts)
-		conn, parallel, timeout := connOptions(opts), max(opts.parallel, minTestParallel), opts.timeout
-		mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		targets, err := namedTargets(lc.cfg, names)
-		if err != nil {
-			return nil, err
-		}
+// savedRun is one saved host's outcome: Err is set when its secrets could
+// not be resolved (it was never contacted); otherwise Result holds the job's.
+type savedRun struct {
+	Target runner.Target
+	Result runner.Result
+	Err    error
+}
 
-		// Resolve per host, so one unset env var or missing secret fails
-		// only that host's test.
-		results := make([]webui.TestResult, len(targets))
-		var ready []runner.Target
-		var readyIdx []int
-		resolver := newResolver()
-		for i := range targets {
-			results[i] = webui.TestResult{Name: targets[i].Name, Host: targets[i].Host.Host}
-			if err := runner.Resolve(ctx, resolver, targets[i:i+1]); err != nil {
-				results[i].Summary, results[i].Detail = shortError(err), err.Error()
+// savedRunner runs a job on saved hosts for the UI. Each call reloads the
+// config (so defaults edited in the UI apply), accepts exact saved names
+// only, and resolves secrets per host so one missing secret fails only that
+// host.
+type savedRunner struct {
+	cmd  *cobra.Command
+	opts *globalOptions
+	mu   sync.Mutex // loadConfig writes the resolved defaults into opts
+}
+
+// run executes job with at least minParallel workers; perHost bounds one
+// host's work beyond the dial timeout.
+func (s *savedRunner) run(ctx context.Context, names []string, minParallel int, perHost time.Duration, job runner.ConnJob) ([]savedRun, error) {
+	s.mu.Lock()
+	lc, err := loadConfig(s.cmd, s.opts)
+	conn, parallel, timeout := connOptions(s.opts), max(s.opts.parallel, minParallel), s.opts.timeout
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	targets, err := namedTargets(lc.cfg, names)
+	if err != nil {
+		return nil, err
+	}
+
+	runs := make([]savedRun, len(targets))
+	var ready []runner.Target
+	var readyIdx []int
+	resolver := newResolver()
+	for i := range targets {
+		runs[i].Target = targets[i]
+		if err := runner.Resolve(ctx, resolver, targets[i:i+1]); err != nil {
+			runs[i].Err = err
+			continue
+		}
+		ready = append(ready, targets[i])
+		readyIdx = append(readyIdx, i)
+	}
+
+	rounds := (len(ready) + parallel - 1) / parallel
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(max(rounds, 1))*(time.Duration(timeout)*time.Second+perHost))
+	defer cancel()
+	for j, r := range runner.Execute(ctx, ready, parallel, runner.WithConn(conn, job)) {
+		runs[readyIdx[j]].Result = r
+	}
+	return runs, nil
+}
+
+// failure is the (summary, detail) pair for a host that failed: its secret
+// error, or its job error.
+func (r savedRun) failure() (string, string, bool) {
+	err := r.Err
+	if err == nil {
+		err = r.Result.Err
+	}
+	if err == nil {
+		return "", "", false
+	}
+	return shortError(err), strings.ReplaceAll(err.Error(), "\n", " "), true
+}
+
+// hostTester backs the UI's Test button: connect to each named host and run
+// the RouterOS version check. A host that answers but is not RouterOS still
+// passes as "connected".
+func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
+	s := &savedRunner{cmd: cmd, opts: opts}
+	return func(ctx context.Context, names []string) ([]webui.TestResult, error) {
+		runs, err := s.run(ctx, names, minTestParallel, 30*time.Second, versionProbe)
+		if err != nil {
+			return nil, err
+		}
+		results := make([]webui.TestResult, len(runs))
+		for i, r := range runs {
+			out := &results[i]
+			out.Name, out.Host, out.DurationMS = r.Target.Name, r.Target.Host.Host, r.Result.Duration.Milliseconds()
+			if summary, detail, failed := r.failure(); failed {
+				out.Summary, out.Detail = summary, detail
 				continue
 			}
-			ready = append(ready, targets[i])
-			readyIdx = append(readyIdx, i)
-		}
-
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second+30*time.Second)
-		defer cancel()
-		ran := runner.Execute(ctx, ready, parallel, runner.WithConn(conn, versionProbe))
-		for j, r := range ran {
-			out := &results[readyIdx[j]]
-			out.DurationMS = r.Duration.Milliseconds()
-			switch v, ok := r.Data.(mt.Version); {
-			case r.Err != nil:
-				out.Summary, out.Detail = shortError(r.Err), strings.ReplaceAll(r.Err.Error(), "\n", " ")
-			case ok:
-				out.OK, out.Detail = true, describeVersion(v)
-			default:
-				out.OK, out.Detail = true, "connected (not RouterOS)"
+			out.OK, out.Detail = true, "connected (not RouterOS)"
+			if v, ok := r.Result.Data.(mt.Version); ok {
+				out.Detail = describeVersion(v)
 			}
-			if out.OK {
-				out.Summary = out.Detail
-			}
+			out.Summary = out.Detail
 		}
 		return results, nil
 	}
+}
+
+// hostUpgrader backs the UI's Upgrade tab with the `mt upgrade` step: each
+// device is re-planned on the spot (the page's view is never trusted), then
+// the step runs, or with Dry is only described. Upgrades use --parallel as
+// the CLI does.
+func hostUpgrader(cmd *cobra.Command, opts *globalOptions) *webui.Upgrader {
+	s := &savedRunner{cmd: cmd, opts: opts}
+	run := func(dry bool) func(context.Context, []string) ([]webui.UpgradeResult, error) {
+		return func(ctx context.Context, names []string) ([]webui.UpgradeResult, error) {
+			minParallel := 1
+			if dry {
+				minParallel = minTestParallel
+			}
+			runs, err := s.run(ctx, names, minParallel, updateWait+60*time.Second,
+				func(ctx context.Context, conn *ssh.Conn, _ runner.Target, res *runner.Result) {
+					plan, err := planUpgrade(ctx, conn)
+					if err == nil && !dry {
+						err = applyUpgrade(ctx, conn, plan)
+					}
+					if err != nil {
+						res.Err, res.ExitCode = err, -1
+						return
+					}
+					res.Data = plan
+				})
+			if err != nil {
+				return nil, err
+			}
+			results := make([]webui.UpgradeResult, len(runs))
+			for i, r := range runs {
+				out := &results[i]
+				out.Name, out.Host, out.DurationMS = r.Target.Name, r.Target.Host.Host, r.Result.Duration.Milliseconds()
+				if summary, detail, failed := r.failure(); failed {
+					out.Summary, out.Detail = summary, detail
+					continue
+				}
+				plan, _ := r.Result.Data.(upgradePlan)
+				out.OK, out.Action = true, plan.Action
+				out.Summary = strings.ReplaceAll(plan.describe(dry), " -> ", " → ")
+				out.Detail = out.Summary
+			}
+			return results, nil
+		}
+	}
+	return &webui.Upgrader{Dry: run(true), Apply: run(false)}
 }
 
 // shortError reduces a wrapped error to its cause for the UI badge, e.g.

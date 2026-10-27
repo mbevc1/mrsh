@@ -65,6 +65,9 @@ td.actions { text-align: right; }
 .test-table { table-layout: fixed; }
 .test-table td { overflow: hidden; text-overflow: ellipsis; }
 .test-table th.time { width: 90px; }
+.test-table th.check { width: 44px; }
+button.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--accent-text); }
+.hint.warn { color: var(--warn-text); background: var(--warn-bg); padding: 8px 12px; border-radius: var(--radius); }
 th.status, td.status { width: 304px; min-width: 304px; max-width: 304px; overflow: hidden; } /* 280px badge + 2 × 12px padding */
 .badge { display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
   padding: 1px 8px; border-radius: 999px; font-size: 12px; }

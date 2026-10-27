@@ -14,7 +14,7 @@ const token = (() => {
 })();
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const state = { version: "", cfg: null, editing: null, tests: {} }; // tests: name -> {ok, detail, ms} or {running}
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set() }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -29,7 +29,7 @@ async function api(method, path, body) {
   if (body !== undefined) headers["Content-Type"] = "application/json";
   // Every write carries the version this page loaded, so a stale tab
   // cannot overwrite a newer change.
-  if (method !== "GET" && path !== "/api/validate" && path !== "/api/test") headers["If-Match"] = state.version;
+  if (method !== "GET" && path !== "/api/validate" && path !== "/api/test" && !path.startsWith("/api/upgrade/")) headers["If-Match"] = state.version;
   const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new APIError(res.status, data);
@@ -225,18 +225,26 @@ function render() {
   const testCurrent = testGroup.value;
   testGroup.replaceChildren(new Option("All groups", ""), ...cfg.groups.map((g) => new Option(g, g)));
   testGroup.value = cfg.groups.includes(testCurrent) ? testCurrent : "";
+  const upgradeGroup = $("#upgrade-group");
+  const upgradeCurrent = upgradeGroup.value;
+  upgradeGroup.replaceChildren(new Option("All groups", ""), ...cfg.groups.map((g) => new Option(g, g)));
+  upgradeGroup.value = cfg.groups.includes(upgradeCurrent) ? upgradeCurrent : "";
   const names = new Set(cfg.hosts.map((h) => h.name));
   for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
+  for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
+  for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
 
   renderHosts();
   renderTests();
+  renderUpgrades();
   renderDefaults();
   $("#commands").value = cfg.commands.join("\n");
 }
 
-// statusBadge shows a host's last test result, or nothing before a test.
-function statusBadge(name) {
-  const r = state.tests[name];
+// statusBadge shows a host's last result from results (tests or upgrades),
+// or nothing before one.
+function statusBadge(name, results = state.tests) {
+  const r = results[name];
   const span = document.createElement("span");
   if (!r) return span;
   if (r.running) {
@@ -249,11 +257,72 @@ function statusBadge(name) {
   return span;
 }
 
-function statusCell(name) {
+function statusCell(name, results = state.tests) {
   const td = document.createElement("td");
   td.className = "status";
-  td.append(statusBadge(name));
+  td.append(statusBadge(name, results));
   return td;
+}
+
+const fmtMs = (r) => r && !r.running && r.ms > 0 ? (r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(1)} s`) : "";
+
+function upgradeNames() {
+  const group = $("#upgrade-group").value;
+  return state.cfg.hosts.filter((h) => !group || h.group === group).map((h) => h.name);
+}
+
+function renderUpgrades() {
+  const shown = upgradeNames();
+  const tbody = $("#upgrade-rows");
+  tbody.replaceChildren();
+  for (const h of state.cfg.hosts.filter((h) => shown.includes(h.name))) {
+    const r = state.upgrades[h.name];
+    const pick = document.createElement("input");
+    pick.type = "checkbox"; pick.checked = state.picked.has(h.name);
+    pick.setAttribute("aria-label", `Select ${h.name}`);
+    pick.addEventListener("change", () => {
+      if (pick.checked) state.picked.add(h.name); else state.picked.delete(h.name);
+      renderUpgrades();
+    });
+    const pickCell = document.createElement("td");
+    pickCell.className = "check";
+    pickCell.append(pick);
+    const tr = document.createElement("tr");
+    tr.append(pickCell, cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"),
+      r ? statusCell(h.name, state.upgrades) : cell("", "status"), cell(fmtMs(r), "num"));
+    tbody.append(tr);
+  }
+  const picked = shown.filter((n) => state.picked.has(n));
+  $("#upgrade-all").checked = shown.length > 0 && picked.length === shown.length;
+  $("#upgrade-all").indeterminate = picked.length > 0 && picked.length < shown.length;
+  $("#upgrade-count").textContent = `${picked.length} of ${shown.length} selected`;
+  $("#upgrade-run").disabled = $("#upgrade-dry").disabled = picked.length === 0;
+}
+
+// runUpgrades runs the `mt upgrade` step (or its dry run) on the ticked hosts.
+async function runUpgrades(apply) {
+  const names = upgradeNames().filter((n) => state.picked.has(n));
+  if (!names.length) return;
+  if (apply && !confirm(`Upgrade ${names.length} device(s)? Each installs updates and reboots:\n\n${names.join("\n")}`)) return;
+  const btn = apply ? $("#upgrade-run") : $("#upgrade-dry");
+  for (const n of names) state.upgrades[n] = { running: true };
+  renderUpgrades();
+  await busy(btn, apply ? "Upgrading…" : "Checking…", async () => {
+    try {
+      const { results } = await api("POST", apply ? "/api/upgrade/apply" : "/api/upgrade/dry", { hosts: names, confirm: apply });
+      for (const r of results) {
+        state.upgrades[r.name] = { ok: r.ok, summary: r.summary || r.detail, detail: r.detail, ms: r.duration_ms, action: r.action };
+      }
+      const failed = results.filter((r) => !r.ok).length;
+      const acted = results.filter((r) => r.ok && r.action !== "none").length;
+      toast(apply ? `${acted} upgrading, ${results.length - acted - failed} up to date, ${failed} failed`
+        : `${acted} would upgrade, ${results.length - acted - failed} up to date, ${failed} failed`, failed > 0);
+    } catch (err) {
+      for (const n of names) delete state.upgrades[n];
+      banner(`${apply ? "Upgrade" : "Dry run"} failed: ${err.message}`);
+    }
+  });
+  renderUpgrades();
 }
 
 // runTests asks the server to connect to the named saved hosts.
@@ -289,7 +358,7 @@ function renderTests() {
     const r = state.tests[h.name];
     const result = r ? statusCell(h.name) : cell("not tested", "status muted");
     // A host that failed before connecting (e.g. an unset env var) has no time.
-    const ms = r && !r.running && r.ms > 0 ? (r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(1)} s`) : "";
+    const ms = fmtMs(r);
     const tr = document.createElement("tr");
     tr.append(cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"), result, cell(ms, "num"));
     tbody.append(tr);
@@ -485,7 +554,7 @@ async function saveCommands(ev) {
 
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["hosts", "defaults", "commands", "test"]) $(`#tab-${t}`).hidden = t !== name;
+  for (const t of ["hosts", "defaults", "commands", "test", "upgrade"]) $(`#tab-${t}`).hidden = t !== name;
 }
 
 let heartbeatTimer;
@@ -534,6 +603,13 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
   $("#test-group").addEventListener("change", renderTests);
+  $("#upgrade-group").addEventListener("change", renderUpgrades);
+  $("#upgrade-all").addEventListener("change", (e) => {
+    for (const n of upgradeNames()) if (e.target.checked) state.picked.add(n); else state.picked.delete(n);
+    renderUpgrades();
+  });
+  $("#upgrade-dry").addEventListener("click", () => runUpgrades(false));
+  $("#upgrade-run").addEventListener("click", () => runUpgrades(true));
   $("#test-run").addEventListener("click", () => runTests(testNames(), $("#test-run")));
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));

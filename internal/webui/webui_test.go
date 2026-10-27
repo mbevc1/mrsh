@@ -485,3 +485,63 @@ func TestTestHostsRoute(t *testing.T) {
 		t.Errorf("form body: %d", w.Code)
 	}
 }
+
+func TestUpgradeRoutes(t *testing.T) {
+	f := newFixture(t)
+	if w, _ := f.do("POST", "/api/upgrade/apply", `{"hosts":["web01"],"confirm":true}`); w.Code != http.StatusNotImplemented {
+		t.Errorf("no upgrader: %d", w.Code)
+	}
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var dryNames []string
+	f.srv.Upgrade = &Upgrader{
+		Dry: func(_ context.Context, names []string) ([]UpgradeResult, error) {
+			dryNames = names
+			return []UpgradeResult{{Name: "web01", OK: true, Action: "install", Summary: "would install"}}, nil
+		},
+		Apply: func(_ context.Context, names []string) ([]UpgradeResult, error) {
+			if names[0] == "ghost" {
+				return nil, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
+			}
+			started <- struct{}{}
+			<-release
+			return []UpgradeResult{{Name: "web01", OK: true, Action: "install"}}, nil
+		},
+	}
+	f.h = f.srv.Handler()
+
+	if w, out := f.do("POST", "/api/upgrade/dry", `{"hosts":["web01"]}`); w.Code != 200 || len(dryNames) != 1 || out["results"] == nil {
+		t.Errorf("dry: %d %s", w.Code, w.Body)
+	}
+	for _, tc := range []struct {
+		body string
+		opts []reqOpt
+		want int
+	}{
+		{`{"hosts":["web01"]}`, nil, 400},
+		{`{"hosts":[],"confirm":true}`, nil, 400},
+		{`{"hosts":["ghost"],"confirm":true}`, nil, 404},
+		{`{"hosts":["web01"],"confirm":true}`, []reqOpt{header(TokenHeader, "")}, 401},
+		{`hosts=web01&confirm=true`, []reqOpt{header("Content-Type", "application/x-www-form-urlencoded")}, 415},
+	} {
+		if w, _ := f.do("POST", "/api/upgrade/apply", tc.body, tc.opts...); w.Code != tc.want {
+			t.Errorf("%s: %d, want %d", tc.body, w.Code, tc.want)
+		}
+	}
+
+	// A second apply while one runs is refused.
+	done := make(chan int, 1)
+	go func() {
+		w, _ := f.do("POST", "/api/upgrade/apply", `{"hosts":["web01"],"confirm":true}`)
+		done <- w.Code
+	}()
+	<-started
+	if w, _ := f.do("POST", "/api/upgrade/apply", `{"hosts":["web01"],"confirm":true}`); w.Code != http.StatusConflict {
+		t.Errorf("concurrent apply: %d", w.Code)
+	}
+	close(release)
+	if code := <-done; code != 200 {
+		t.Errorf("first apply: %d", code)
+	}
+}

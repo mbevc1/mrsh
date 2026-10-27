@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/mbevc1/mrsh/internal/mt"
 	"github.com/mbevc1/mrsh/internal/sshtest"
 	"github.com/mbevc1/mrsh/internal/webui"
 )
@@ -152,6 +154,81 @@ func TestShortError(t *testing.T) {
 	for _, tt := range tests {
 		if got := shortError(tt.err); got != tt.want {
 			t.Errorf("shortError(%q) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
+}
+
+func upgradeResults(t *testing.T, body []byte) map[string]webui.UpgradeResult {
+	t.Helper()
+	var out struct{ Results []webui.UpgradeResult }
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	m := map[string]webui.UpgradeResult{}
+	for _, r := range out.Results {
+		m[r.Name] = r
+	}
+	return m
+}
+
+func TestUIUpgradeOneStep(t *testing.T) {
+	f, cfg := startRouter(t)
+	post := startUI(t, cfg)
+	available := "installed-version: 7.13.2\nlatest-version: 7.14\nstatus: New version is available\n"
+
+	// Dry run reports the step and changes nothing.
+	f.update = []string{available}
+	code, body := post("/api/upgrade/dry", `{"hosts":["rt1"]}`)
+	r := upgradeResults(t, body)["rt1"]
+	if code != 200 || !r.OK || r.Action != "install" || r.Summary != "would install RouterOS 7.13.2 → 7.14" {
+		t.Fatalf("dry: %d %+v", code, r)
+	}
+	if f.sentContains(mt.InstallUpdatesCmd) {
+		t.Fatal("dry run installed")
+	}
+
+	// One click, no prior check: the device is planned and upgraded.
+	code, body = post("/api/upgrade/apply", `{"hosts":["rt1"],"confirm":true}`)
+	r = upgradeResults(t, body)["rt1"]
+	if code != 200 || !r.OK || r.Action != "install" || !strings.Contains(r.Summary, "installing RouterOS 7.13.2 → 7.14") {
+		t.Fatalf("apply: %d %+v", code, r)
+	}
+	if !f.sentContains(mt.InstallUpdatesCmd) {
+		t.Errorf("install not sent: %v", f.sent())
+	}
+
+	// Next run: RouterOS current, firmware behind (rbSample) -> firmware step.
+	f.update = []string{"installed-version: 7.14\nlatest-version: 7.14\nstatus: System is already up to date\n"}
+	code, body = post("/api/upgrade/apply", `{"hosts":["rt1"],"confirm":true}`)
+	if r = upgradeResults(t, body)["rt1"]; code != 200 || r.Action != "firmware" || !f.sentContains(mt.FirmwareUpgrade) || !f.sentContains(mt.RebootCmd) {
+		t.Fatalf("firmware: %d %+v %v", code, r, f.sent())
+	}
+
+	// Up to date: the server re-plans, so apply changes nothing.
+	f.rb = "current-firmware: 7.14\nupgrade-firmware: 7.14\n"
+	before := len(f.sent())
+	code, body = post("/api/upgrade/apply", `{"hosts":["rt1"],"confirm":true}`)
+	if r = upgradeResults(t, body)["rt1"]; code != 200 || r.Action != "none" || r.Summary != "up to date (RouterOS 7.14)" {
+		t.Fatalf("up to date: %d %+v", code, r)
+	}
+	for _, c := range f.sent()[before:] {
+		if c == mt.InstallUpdatesCmd || c == mt.FirmwareUpgrade || c == mt.RebootCmd {
+			t.Errorf("up-to-date device changed: %q", c)
+		}
+	}
+
+	for _, tc := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/api/upgrade/apply", `{"hosts":["rt1"]}`, 400},                 // no confirm
+		{"/api/upgrade/apply", `{"hosts":[],"confirm":true}`, 400},       // never "all"
+		{"/api/upgrade/dry", `{"hosts":[]}`, 400},                        // never "all"
+		{"/api/upgrade/apply", `{"hosts":["nope"],"confirm":true}`, 404}, // saved names only
+		{"/api/upgrade/apply", `{"hosts":["127.0.0.1"],"confirm":true}`, 404},
+	} {
+		if code, body := post(tc.path, tc.body); code != tc.want {
+			t.Errorf("%s %s: %d %s", tc.path, tc.body, code, body)
 		}
 	}
 }

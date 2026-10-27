@@ -31,12 +31,22 @@ defaults:
 # commands:
 #   - uptime
 
+# Reusable logins: hosts (or defaults) use one with 'credential: NAME', and
+# a host's own user, pass or identity_file still wins over the set's.
+# credentials:
+#   routers:
+#     user: admin
+#     pass_env: ROUTERS_PASS
+
 hosts: []
 # Set at most one of pass, pass_env or pass_arn per host (same for user):
 #  - name: web01
 #    host: 10.0.0.1
 #    group: web
 #    pass_env: WEB01_PASS
+#  - name: rb01
+#    host: 10.0.0.254
+#    credential: routers
 `
 
 func newHostsCmd(opts *globalOptions) *cobra.Command {

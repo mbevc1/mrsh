@@ -31,8 +31,8 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `mt backup` | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` | Firmware and package versions across the fleet. |
-| `ui` | A local browser editor for the same config (loopback only). Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. It runs no other commands. |
-| `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
+| `ui` | A local browser editor for the same config (loopback only): hosts, credential sets, defaults and commands. Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. It runs no other commands. |
+| `completion bash\|zsh\|fish\|powershell` | Shell completion; host names, groups and credential set names complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
 ## Targeting hosts
@@ -43,15 +43,17 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 
 ## Secrets
 
-For each host (and in `defaults`), set at most one form of `user` and of `pass`:
+For each host, in `defaults` and in each credential set, set at most one form of `user` and of `pass`:
 
 | Key | Meaning |
 |-----|---------|
-| `pass` | Literal value, used verbatim |
-| `pass_env` | Name of an environment variable |
-| `pass_arn` | AWS SSM parameter or Secrets Manager ARN; `#key` picks a field from a JSON secret |
+| `user`, `pass` | Literal value, used verbatim |
+| `user_env`, `pass_env` | Name of an environment variable |
+| `user_arn`, `pass_arn` | AWS SSM parameter or Secrets Manager ARN; `#key` picks a field from a JSON secret |
 
-Credential sets bundle a login for reuse: define them under `credentials:` and reference one with `credential: NAME` on a host or in `defaults` (or `mrsh hosts add/update --credential NAME`). For each of user, pass and identity file, a host uses its own value, else its set's, else `defaults`, else the set named in `defaults`, so a host can share a set and still override one field. `mrsh credentials list|set|remove` (alias `creds`) manages them, as does the UI's Credentials tab; a set in use cannot be removed.
+`identity_file` (an SSH private key) can be set the same places, as a path.
+
+Credential sets bundle a login (user, pass and optionally `identity_file`) for reuse: define them under `credentials:` and reference one with `credential: NAME` on a host or in `defaults` (or `mrsh hosts add/update --credential NAME`). For each of user, pass and identity file, a host uses its own value, else its set's, else `defaults`, else the set named in `defaults`, so a host can share a set and still override one field. `mrsh credentials list|set|remove` (alias `creds`) manages them, as does the UI's Credentials tab; a set in use cannot be removed.
 
 ```yaml
 credentials:

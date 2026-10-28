@@ -440,9 +440,10 @@ func pollUpdate(ctx context.Context, conn *ssh.Conn) (mt.UpdateStatus, error) {
 
 func newMtVersionCmd(opts *globalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Show routerboard firmware and installed package versions",
-		Args:  cobra.NoArgs,
+		Use:     "version",
+		Aliases: []string{"v", "ver"},
+		Short:   "Show routerboard firmware and installed package versions",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {

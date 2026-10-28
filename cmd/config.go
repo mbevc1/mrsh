@@ -15,7 +15,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/s3client"
 )
 
-// sse returns the global --sse/--kms-key settings.
 func (o *globalOptions) sse() s3client.SSE { return s3client.SSE{Mode: o.sseMode, KMSKey: o.kmsKey} }
 
 // openStore opens the --config source, applying --sse/--kms-key to S3 saves.
@@ -27,7 +26,6 @@ func openStore(opts *globalOptions) (config.ConfigStore, error) {
 	return config.NewStore(opts.config, config.StoreOptions{SSE: sse})
 }
 
-// loadedConfig is a validated config plus where it came from.
 type loadedConfig struct {
 	cfg     *config.Config
 	store   config.ConfigStore
@@ -67,7 +65,6 @@ func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) 
 	return &loadedConfig{cfg: cfg, store: store, version: version}, nil
 }
 
-// defaultBindings maps hosts.yaml defaults keys to global flag names.
 var defaultBindings = map[string]string{
 	"defaults.parallel": "parallel",
 	"defaults.timeout":  "timeout",

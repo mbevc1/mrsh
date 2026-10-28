@@ -13,7 +13,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// maxBody bounds request bodies.
 const maxBody = 1 << 20
 
 // Secret is a user or pass field-group as the UI sees it. Kind is "unset",

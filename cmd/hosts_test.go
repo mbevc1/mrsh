@@ -19,8 +19,11 @@ func TestHostsListMasksSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "literalsecret") || strings.Contains(out, "deploy") {
-		t.Errorf("literal secrets not masked:\n%s", out)
+	if strings.Contains(out, "literalsecret") {
+		t.Errorf("literal password not masked:\n%s", out)
+	}
+	if !strings.Contains(out, "deploy") {
+		t.Errorf("username hidden; usernames are shown without --show-secrets:\n%s", out)
 	}
 	for _, want := range []string{config.Mask, "env:WEB01_PASS", "arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/db02/pass", "2222"} {
 		if !strings.Contains(out, want) {
@@ -145,5 +148,16 @@ func TestDefaultsPrecedence(t *testing.T) {
 				t.Errorf("got parallel=%d timeout=%d output=%s debug=%v", got.parallel, got.timeout, got.output, got.debug)
 			}
 		})
+	}
+}
+
+func TestAliasesRunEndToEnd(t *testing.T) {
+	out, err := execRoot(t, "h", "list", "-f", testdataHosts, "-g", "db")
+	if err != nil || !strings.Contains(out, "db02") || strings.Contains(out, "web01") {
+		t.Errorf("mrsh h list: err=%v\n%s", err, out)
+	}
+	out, err = execRoot(t, "-f", testdataHosts, "--dry-run", "-H", "web01", "r", "-c", "uptime")
+	if err != nil || !strings.Contains(out, "would run on 1 host") {
+		t.Errorf("mrsh r: err=%v\n%s", err, out)
 	}
 }

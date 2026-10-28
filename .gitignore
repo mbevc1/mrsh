@@ -32,5 +32,9 @@ go.work.sum
 # .vscode/
 
 # Build output
-/bin/
+/mrsh
 /dist/
+
+# Local config (may hold secrets); hosts.example.yaml is the template
+/hosts.yaml
+/backups/

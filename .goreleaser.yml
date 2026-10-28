@@ -1,0 +1,85 @@
+# GoReleaser v2. The ldflags path must match CMD_PKG in the Makefile
+# (github.com/mbevc1/mrsh/cmd); a mismatch silently leaves "dev".
+version: 2
+
+project_name: mrsh
+
+before:
+  hooks:
+    # Verify only: a release must not rewrite go.mod/go.sum.
+    - go mod download
+    - go mod verify
+
+builds:
+  - id: mrsh
+    main: .
+    binary: mrsh
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mbevc1/mrsh/cmd.version={{ .Version }}
+      - -X github.com/mbevc1/mrsh/cmd.commit={{ .ShortCommit }}
+      - -X github.com/mbevc1/mrsh/cmd.date={{ .Date }}
+      - -X github.com/mbevc1/mrsh/cmd.builtBy=goreleaser
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: mrsh
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE*
+      - hosts.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive # needs syft; `make snapshot` skips this when syft is absent
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+  groups:
+    - title: Features
+      regexp: '^.*feat[(\w)]*:.*$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*fix[(\w)]*:.*$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: mbevc1
+    name: mrsh
+  draft: false
+  prerelease: auto

@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const commented = `# top comment
@@ -155,4 +159,86 @@ func TestMutateRetriesOnConflict(t *testing.T) {
 	if !errors.Is(err, ErrVersionConflict) {
 		t.Errorf("persistent conflict err = %v", err)
 	}
+}
+
+// Every Host and Defaults field must survive the encode path saves use
+// (AddHost / SetDefaults / SetCommands, then a strict re-parse).
+func TestDocumentRoundTripsEveryField(t *testing.T) {
+	const arnSSM = "arn:aws:ssm:eu-west-1:123456789012:parameter/p"
+	const arnSM = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:s#k"
+	hosts := []Host{
+		{Name: "a", Host: "10.0.0.1", Group: "g", Port: 2222, IdentityFile: "~/.ssh/a", KnownHosts: "~/.ssh/kh",
+			Credentials: Credentials{User: "u", PassEnv: "A_PASS"}},
+		{Name: "b", Host: "10.0.0.2", Credentials: Credentials{UserARN: arnSM, Pass: "p w"}},
+		{Name: "c", Host: "10.0.0.3", Credentials: Credentials{UserEnv: "C_USER", PassARN: arnSSM}},
+	}
+	defaults := Defaults{
+		Credentials: Credentials{UserEnv: "D_USER", PassARN: arnSSM},
+		Port:        22, Timeout: 9, IdentityFile: "~/.ssh/d", KnownHosts: "~/.ssh/dkh",
+		HostKeyPolicy: HostKeyAcceptNew, Parallel: 4, Output: "json", Debug: true,
+	}
+	commands := []string{"uptime", "df -h"}
+
+	d := mustDoc(t, "hosts: []\n")
+	for _, h := range hosts {
+		if err := d.AddHost(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.SetDefaults(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetCommands(commands); err != nil {
+		t.Fatal(err)
+	}
+	c, out := reparse(t, d)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(c.Hosts, hosts) || c.Defaults != defaults || !reflect.DeepEqual(c.Commands, commands) {
+		t.Errorf("round trip changed the config:\n%s", out)
+	}
+	// A round trip can't catch a renamed tag (encode and decode change
+	// together), so pin the documented key names per section.
+	var raw struct {
+		Defaults map[string]any   `yaml:"defaults"`
+		Hosts    []map[string]any `yaml:"hosts"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	hostKeys := map[string]bool{}
+	for _, h := range raw.Hosts {
+		for k := range h {
+			hostKeys[k] = true
+		}
+	}
+	wantKeys := func(section string, got map[string]bool, want ...string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Errorf("%s keys = %v, want %v", section, keys(got), want)
+		}
+		for _, k := range want {
+			if !got[k] {
+				t.Errorf("%s key %q missing (got %v)", section, k, keys(got))
+			}
+		}
+	}
+	wantKeys("host", hostKeys, "name", "host", "group", "port", "identity_file", "known_hosts",
+		"user", "user_env", "user_arn", "pass", "pass_env", "pass_arn")
+	defaultKeys := map[string]bool{}
+	for k := range raw.Defaults {
+		defaultKeys[k] = true
+	}
+	wantKeys("defaults", defaultKeys, "user_env", "pass_arn", "port", "timeout", "identity_file",
+		"known_hosts", "host_key_policy", "parallel", "output", "debug")
+}
+
+func keys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

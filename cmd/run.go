@@ -25,8 +25,9 @@ var newResolver = func() runner.SecretResolver { return config.NewResolver() }
 func newRunCmd(opts *globalOptions) *cobra.Command {
 	var command, script string
 	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run a command or script on hosts",
+		Use:     "run",
+		Aliases: []string{"ru", "r"},
+		Short:   "Run a command or script on hosts",
 		Long: "Run a command (-c) or local script (--script, piped to 'sh -s') on the selected hosts.\n" +
 			"With neither, the config's commands: list runs as one script.",
 		Args: cobra.NoArgs,
@@ -68,7 +69,6 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
-// selectTargets applies --group/--host/--user/--identity-file to the config.
 func selectTargets(lc *loadedConfig, opts *globalOptions) ([]runner.Target, error) {
 	targets, err := runner.Targets(lc.cfg, runner.TargetOptions{
 		Group: opts.group, Hosts: opts.hosts, User: opts.user, IdentityFile: opts.identityFile,

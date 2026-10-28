@@ -162,6 +162,21 @@ func TestAliasesRunEndToEnd(t *testing.T) {
 	}
 }
 
+func TestSubcommandAliases(t *testing.T) {
+	root := newRootCmd()
+	for alias, want := range map[string]string{
+		"host ls": "hosts list", "ho l": "hosts list", "h i": "hosts init", "h a": "hosts add",
+		"h u": "hosts update", "h up": "hosts update", "h r": "hosts remove", "h rm": "hosts remove",
+		"creds ls": "credentials list", "creds l": "credentials list", "creds s": "credentials set",
+		"creds r": "credentials remove", "creds rm": "credentials remove", "creds ass": "credentials assign",
+	} {
+		c, _, err := root.Find(strings.Fields(alias))
+		if got := strings.TrimPrefix(c.CommandPath(), "mrsh "); err != nil || got != want {
+			t.Errorf("%s -> %q, %v; want %q", alias, got, err, want)
+		}
+	}
+}
+
 func TestHostsExample(t *testing.T) {
 	out, err := execRoot(t, "hosts", "example")
 	if err != nil {

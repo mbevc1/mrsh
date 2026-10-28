@@ -143,6 +143,7 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 	var f hostFlags
 	cmd := &cobra.Command{
 		Use:     "add --name NAME -H ADDRESS [flags]",
+		Aliases: []string{"a"},
 		Short:   "Add a host entry",
 		Long:    "Add a host entry.\n\n" + sharedFlagsHelp,
 		Example: "  mrsh hosts add --name web03 -H 10.0.0.3 -g web -u deploy --pass-env WEB03_PASS",
@@ -176,8 +177,9 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 	var f hostFlags
 	cmd := &cobra.Command{
-		Use:   "update --name NAME [flags]",
-		Short: "Update fields of a host entry (only the flags given)",
+		Use:     "update --name NAME [flags]",
+		Aliases: []string{"u", "up"},
+		Short:   "Update fields of a host entry (only the flags given)",
 		Long: "Update fields of the host named by --name; only the flags given change.\n" +
 			"A new user or pass variant replaces the old one.\n\n" + sharedFlagsHelp,
 		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03",
@@ -216,9 +218,10 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
-		Use:   "remove --name NAME",
-		Short: "Remove a host entry (asks for confirmation unless -y/--assume-yes)",
-		Args:  cobra.NoArgs,
+		Use:     "remove --name NAME",
+		Aliases: []string{"r", "rm"},
+		Short:   "Remove a host entry (asks for confirmation unless -y/--assume-yes)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openStore(opts)
 			if err != nil {

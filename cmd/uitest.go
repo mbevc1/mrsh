@@ -41,8 +41,9 @@ type savedRunner struct {
 }
 
 // run executes job with at least minParallel workers; perHost bounds one
-// host's work beyond the dial timeout.
-func (s *savedRunner) run(ctx context.Context, names []string, minParallel int, perHost time.Duration, job runner.ConnJob) ([]savedRun, error) {
+// host's work beyond the dial timeout. done, if set, hears each host's
+// outcome as soon as it is known.
+func (s *savedRunner) run(ctx context.Context, names []string, minParallel int, perHost time.Duration, job runner.ConnJob, done func(savedRun)) ([]savedRun, error) {
 	s.mu.Lock()
 	lc, err := loadConfig(s.cmd, s.opts)
 	conn, parallel, timeout := connOptions(s.opts), max(s.opts.parallel, minParallel), s.opts.timeout
@@ -63,6 +64,9 @@ func (s *savedRunner) run(ctx context.Context, names []string, minParallel int, 
 		runs[i].Target = targets[i]
 		if err := runner.Resolve(ctx, resolver, targets[i:i+1]); err != nil {
 			runs[i].Err = err
+			if done != nil {
+				done(runs[i])
+			}
 			continue
 		}
 		ready = append(ready, targets[i])
@@ -72,10 +76,25 @@ func (s *savedRunner) run(ctx context.Context, names []string, minParallel int, 
 	rounds := (len(ready) + parallel - 1) / parallel
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(max(rounds, 1))*(time.Duration(timeout)*time.Second+perHost))
 	defer cancel()
-	for j, r := range runner.Execute(ctx, ready, parallel, runner.WithConn(conn, job)) {
+	withConn := runner.WithConn(conn, job)
+	each := func(ctx context.Context, t runner.Target) runner.Result {
+		r := withConn(ctx, t)
+		if done != nil {
+			done(savedRun{Target: t, Result: r})
+		}
+		return r
+	}
+	for j, r := range runner.Execute(ctx, ready, parallel, each) {
 		runs[readyIdx[j]].Result = r
 	}
 	return runs, nil
+}
+
+// connOptions reads the options under the lock loadConfig writes them under.
+func (s *savedRunner) connOptions() runner.ConnOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return connOptions(s.opts)
 }
 
 // failure is the (summary, detail) pair for a host that failed: its secret
@@ -96,73 +115,126 @@ func (r savedRun) failure() (string, string, bool) {
 // passes as "connected".
 func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
 	s := &savedRunner{cmd: cmd, opts: opts}
-	return func(ctx context.Context, names []string) ([]webui.TestResult, error) {
-		runs, err := s.run(ctx, names, minTestParallel, 30*time.Second, versionProbe)
+	return func(ctx context.Context, names []string, done func(webui.TestResult)) ([]webui.TestResult, error) {
+		var each func(savedRun)
+		if done != nil {
+			each = func(r savedRun) { done(testResult(r)) }
+		}
+		runs, err := s.run(ctx, names, minTestParallel, 30*time.Second, versionProbe, each)
 		if err != nil {
 			return nil, err
 		}
 		results := make([]webui.TestResult, len(runs))
 		for i, r := range runs {
-			out := &results[i]
-			out.Name, out.Host, out.DurationMS = r.Target.Name, r.Target.Host.Host, r.Result.Duration.Milliseconds()
-			if summary, detail, failed := r.failure(); failed {
-				out.Summary, out.Detail = summary, detail
-				continue
-			}
-			out.OK, out.Detail = true, "connected (not RouterOS)"
-			if v, ok := r.Result.Data.(mt.Version); ok {
-				out.Detail = describeVersion(v)
-			}
-			out.Summary = out.Detail
+			results[i] = testResult(r)
 		}
 		return results, nil
 	}
 }
 
+// testResult is one host's check for the page.
+func testResult(r savedRun) webui.TestResult {
+	out := webui.TestResult{Name: r.Target.Name, Host: r.Target.Host.Host, DurationMS: r.Result.Duration.Milliseconds()}
+	if summary, detail, failed := r.failure(); failed {
+		out.Summary, out.Detail = summary, detail
+		return out
+	}
+	out.OK, out.Detail = true, "connected (not RouterOS)"
+	if v, ok := r.Result.Data.(mt.Version); ok {
+		out.Detail, out.Pending = describeVersion(v), v.FirmwarePending()
+	}
+	out.Summary = out.Detail
+	return out
+}
+
 // hostUpgrader backs the UI's Upgrade tab with the `mt upgrade` step: each
 // device is re-planned on the spot (the page's view is never trusted), then
-// the step runs, or with Dry is only described. Upgrades use --parallel as
-// the CLI does.
+// the step runs, or with Dry is only described. With wait it takes every
+// step through the reboots, as `mt upgrade --wait` does. Upgrades use
+// --parallel as the CLI does.
 func hostUpgrader(cmd *cobra.Command, opts *globalOptions) *webui.Upgrader {
 	s := &savedRunner{cmd: cmd, opts: opts}
-	run := func(dry bool) func(context.Context, []string) ([]webui.UpgradeResult, error) {
-		return func(ctx context.Context, names []string) ([]webui.UpgradeResult, error) {
-			minParallel := 1
-			if dry {
-				minParallel = minTestParallel
-			}
-			runs, err := s.run(ctx, names, minParallel, updateWait+60*time.Second,
-				func(ctx context.Context, conn *ssh.Conn, _ runner.Target, res *runner.Result) {
-					plan, err := planUpgrade(ctx, conn)
-					if err == nil && !dry {
-						err = applyUpgrade(ctx, conn, plan)
-					}
+	run := func(ctx context.Context, names []string, dry, wait bool, progress webui.Progress) ([]webui.UpgradeResult, error) {
+		if progress == nil {
+			progress = func(webui.UpgradeResult) {}
+		}
+		minParallel, perHost := 1, updateWait+60*time.Second
+		switch {
+		case dry:
+			minParallel = minTestParallel
+		case wait:
+			perHost = maxUpgradeSteps * (rebootWait + updateWait + 2*time.Minute)
+		}
+		runs, err := s.run(ctx, names, minParallel, perHost,
+			func(ctx context.Context, conn *ssh.Conn, t runner.Target, res *runner.Result) {
+				if wait {
+					out, err := upgradeThrough(ctx, conn, redialer(t, s.connOptions()), func(msg string) {
+						progress(webui.UpgradeResult{Name: t.Name, Host: t.Host.Host, OK: true, Running: true, Summary: arrows.Replace(msg)})
+					})
+					res.Data = out
 					if err != nil {
 						res.Err, res.ExitCode = err, -1
-						return
 					}
-					res.Data = plan
-				})
-			if err != nil {
-				return nil, err
-			}
-			results := make([]webui.UpgradeResult, len(runs))
-			for i, r := range runs {
-				out := &results[i]
-				out.Name, out.Host, out.DurationMS = r.Target.Name, r.Target.Host.Host, r.Result.Duration.Milliseconds()
-				if summary, detail, failed := r.failure(); failed {
-					out.Summary, out.Detail = summary, detail
-					continue
+					return
 				}
-				plan, _ := r.Result.Data.(upgradePlan)
-				out.OK, out.Action = true, plan.Action
-				out.Summary = strings.ReplaceAll(plan.describe(dry), " -> ", " → ")
-				out.Detail = out.Summary
-			}
-			return results, nil
+				plan, err := planUpgrade(ctx, conn)
+				if err == nil && !dry {
+					err = applyUpgrade(ctx, conn, plan)
+				}
+				if err != nil {
+					res.Err, res.ExitCode = err, -1
+					return
+				}
+				res.Data = plan
+			},
+			func(r savedRun) { progress(upgradeResult(r, dry)) })
+		if err != nil {
+			return nil, err
+		}
+		results := make([]webui.UpgradeResult, len(runs))
+		for i, r := range runs {
+			results[i] = upgradeResult(r, dry)
+		}
+		return results, nil
+	}
+	return &webui.Upgrader{
+		Dry: func(ctx context.Context, names []string, progress webui.Progress) ([]webui.UpgradeResult, error) {
+			return run(ctx, names, true, false, progress)
+		},
+		Apply: func(ctx context.Context, names []string, wait bool, progress webui.Progress) ([]webui.UpgradeResult, error) {
+			return run(ctx, names, false, wait, progress)
+		},
+	}
+}
+
+// arrows swaps the CLI's ASCII arrows for the page's.
+var arrows = strings.NewReplacer(" -> ", " → ")
+
+// upgradeResult is one device's outcome for the page: a planned or taken
+// step, or with --wait the steps taken and the final state.
+func upgradeResult(r savedRun, dry bool) webui.UpgradeResult {
+	out := webui.UpgradeResult{Name: r.Target.Name, Host: r.Target.Host.Host, DurationMS: r.Result.Duration.Milliseconds()}
+	if o, ok := r.Result.Data.(upgradeOutcome); ok {
+		for _, step := range o.Steps {
+			out.Steps = append(out.Steps, arrows.Replace(step))
 		}
 	}
-	return &webui.Upgrader{Dry: run(true), Apply: run(false)}
+	if summary, detail, failed := r.failure(); failed {
+		if len(out.Steps) > 0 { // the device changed before the failure
+			summary = "after " + strings.Join(out.Steps, ", ") + ": " + summary
+		}
+		out.Summary, out.Detail = summary, arrows.Replace(detail)
+		return out
+	}
+	out.OK = true
+	switch d := r.Result.Data.(type) {
+	case upgradeOutcome:
+		out.Action, out.Summary = d.Final.Action, arrows.Replace(d.describe())
+	case upgradePlan:
+		out.Action, out.Summary = d.Action, arrows.Replace(d.describe(dry))
+	}
+	out.Detail = out.Summary
+	return out
 }
 
 // shortError reduces a wrapped error to its cause for the UI badge, e.g.
@@ -172,6 +244,8 @@ func shortError(err error) string {
 	var sys *os.SyscallError
 	var dns *net.DNSError
 	switch {
+	case errors.Is(err, errNotBack):
+		return errNotBack.Error()
 	case errors.As(err, &sys):
 		return sys.Syscall + ": " + sys.Err.Error()
 	case errors.As(err, &dns) && dns.IsNotFound:

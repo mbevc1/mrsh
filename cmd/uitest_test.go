@@ -106,6 +106,9 @@ func TestUIHostTest(t *testing.T) {
 	if s := got["rt1"].Summary; s != got["rt1"].Detail {
 		t.Errorf("ok summary %q != detail %q", s, got["rt1"].Detail)
 	}
+	if !got["rt1"].Pending || got["box"].Pending {
+		t.Errorf("pending: rt1 %v, box %v; want true, false", got["rt1"].Pending, got["box"].Pending)
+	}
 	for name, w := range want {
 		r := got[name]
 		if r.OK != w.ok || !bytes.Contains([]byte(r.Detail), []byte(w.detail)) {
@@ -121,6 +124,49 @@ func TestUIHostTest(t *testing.T) {
 		if code, body := post("/api/test", fmt.Sprintf(`{"hosts":[%q]}`, h)); code != 404 {
 			t.Errorf("%s: %d %s", h, code, body)
 		}
+	}
+}
+
+func TestUITestStreamsEachHost(t *testing.T) {
+	_, cfg := startRouter(t)
+	// A host that accepts TCP but never speaks SSH: it fails only at the timeout.
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Close() })
+	go func() {
+		var held []net.Conn
+		defer func() {
+			for _, c := range held {
+				_ = c.Close()
+			}
+		}()
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c)
+		}
+	}()
+	text := strings.Replace(readFile(t, cfg), "defaults: {user: admin}", "defaults: {user: admin, timeout: 1}", 1)
+	text += fmt.Sprintf("  - {name: slow, host: 127.0.0.1, port: %d, pass: pw}\n", silent.Addr().(*net.TCPAddr).Port)
+	if err := os.WriteFile(cfg, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	post := startUI(t, cfg)
+
+	code, body := post("/api/test", `{"hosts":[],"stream":true}`)
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if code != 200 || len(lines) != 3 {
+		t.Fatalf("stream: %d %q", code, lines)
+	}
+	var first, second webui.TestResult
+	_ = json.Unmarshal([]byte(lines[0]), &first)
+	_ = json.Unmarshal([]byte(lines[1]), &second)
+	if first.Name != "rt1" || !first.OK || second.Name != "slow" || second.OK || len(testResults(t, []byte(lines[2]))) != 2 {
+		t.Errorf("order: %+v then %+v; last %s", first, second, lines[2])
 	}
 }
 
@@ -169,6 +215,49 @@ func upgradeResults(t *testing.T, body []byte) map[string]webui.UpgradeResult {
 		m[r.Name] = r
 	}
 	return m
+}
+
+func TestUIUpgradeWait(t *testing.T) {
+	f, cfg := startRouter(t)
+	needsBoth(f)
+	post := startUI(t, cfg)
+	code, body := post("/api/upgrade/apply", `{"hosts":["rt1"],"confirm":true,"wait":true}`)
+	r := upgradeResults(t, body)["rt1"]
+	want := "RouterOS 7.13.2 → 7.14, firmware 7.13.2 → 7.14; up to date (RouterOS 7.14)"
+	if code != 200 || !r.OK || r.Action != "none" || r.Summary != want || len(r.Steps) != 2 || r.Steps[1] != "firmware 7.13.2 → 7.14" {
+		t.Fatalf("apply with wait: %d %+v", code, r)
+	}
+
+	// Streamed, the page hears each step before the final result.
+	needsBoth(f)
+	f.rb = rbSample
+	code, body = post("/api/upgrade/apply", `{"hosts":["rt1"],"confirm":true,"wait":true,"stream":true}`)
+	var progress []string
+	var final webui.UpgradeResult
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for _, line := range lines[:len(lines)-1] {
+		var u webui.UpgradeResult
+		if err := json.Unmarshal([]byte(line), &u); err != nil {
+			t.Fatalf("line %q: %v", line, err)
+		}
+		if u.Running {
+			progress = append(progress, u.Summary)
+		} else {
+			final = u
+		}
+	}
+	wantProgress := []string{
+		"installing RouterOS 7.13.2 → 7.14",
+		"waiting for reboot after RouterOS 7.13.2 → 7.14",
+		"back after RouterOS 7.13.2 → 7.14; checking for updates",
+		"upgrading firmware 7.13.2 → 7.14",
+		"waiting for reboot after RouterOS 7.13.2 → 7.14, firmware 7.13.2 → 7.14",
+		"back after RouterOS 7.13.2 → 7.14, firmware 7.13.2 → 7.14; checking for updates",
+	}
+	if code != 200 || fmt.Sprint(progress) != fmt.Sprint(wantProgress) || final.Summary != want ||
+		upgradeResults(t, []byte(lines[len(lines)-1]))["rt1"].Summary != want {
+		t.Errorf("stream: %d\nprogress %q\nfinal %+v\nlast %s", code, progress, final, lines[len(lines)-1])
+	}
 }
 
 func TestUIUpgradeOneStep(t *testing.T) {

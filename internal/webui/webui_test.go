@@ -460,12 +460,16 @@ func TestTestHostsRoute(t *testing.T) {
 	}
 
 	var gotNames []string
-	f.srv.Test = func(_ context.Context, names []string) ([]TestResult, error) {
+	f.srv.Test = func(_ context.Context, names []string, done func(TestResult)) ([]TestResult, error) {
 		gotNames = names
 		if len(names) == 1 && names[0] == "ghost" {
 			return nil, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
 		}
-		return []TestResult{{Name: "web01", Host: "10.0.0.1", OK: true, Detail: "RouterOS 7.14"}}, nil
+		res := TestResult{Name: "web01", Host: "10.0.0.1", OK: true, Detail: "RouterOS 7.14"}
+		if done != nil {
+			done(res)
+		}
+		return []TestResult{res}, nil
 	}
 	f.h = f.srv.Handler()
 	w, out := f.do("POST", "/api/test", `{"hosts":["web01"]}`)
@@ -477,6 +481,16 @@ func TestTestHostsRoute(t *testing.T) {
 	}
 	if w, _ := f.do("POST", "/api/test", `{"hosts":["ghost"]}`); w.Code != http.StatusNotFound {
 		t.Errorf("unknown host: %d", w.Code)
+	}
+	// Streamed: each host's line, then the list; errors before any host keep their code.
+	w, _ = f.do("POST", "/api/test", `{"hosts":["web01"],"stream":true}`)
+	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/x-ndjson" || len(lines) != 2 ||
+		!strings.Contains(lines[0], `"detail":"RouterOS 7.14"`) || !strings.HasPrefix(lines[1], `{"results":[`) {
+		t.Errorf("stream: %d %q", w.Code, lines)
+	}
+	if w, _ := f.do("POST", "/api/test", `{"hosts":["ghost"],"stream":true}`); w.Code != http.StatusNotFound {
+		t.Errorf("stream unknown host: %d", w.Code)
 	}
 	if w, _ := f.do("POST", "/api/test", `{"hosts":[]}`, header(TokenHeader, "")); w.Code != http.StatusUnauthorized {
 		t.Errorf("no token: %d", w.Code)
@@ -495,12 +509,22 @@ func TestUpgradeRoutes(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
 	var dryNames []string
+	var waited bool
 	f.srv.Upgrade = &Upgrader{
-		Dry: func(_ context.Context, names []string) ([]UpgradeResult, error) {
+		Dry: func(_ context.Context, names []string, progress Progress) ([]UpgradeResult, error) {
+			if names[0] == "ghost" {
+				return nil, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
+			}
 			dryNames = names
-			return []UpgradeResult{{Name: "web01", OK: true, Action: "install", Summary: "would install"}}, nil
+			res := UpgradeResult{Name: "web01", OK: true, Action: "install", Summary: "would install"}
+			if progress != nil {
+				progress(UpgradeResult{Name: "web01", Running: true, Summary: "checking"})
+				progress(res)
+			}
+			return []UpgradeResult{res}, nil
 		},
-		Apply: func(_ context.Context, names []string) ([]UpgradeResult, error) {
+		Apply: func(_ context.Context, names []string, wait bool, _ Progress) ([]UpgradeResult, error) {
+			waited = wait
 			if names[0] == "ghost" {
 				return nil, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
 			}
@@ -530,6 +554,18 @@ func TestUpgradeRoutes(t *testing.T) {
 		}
 	}
 
+	// Streamed: progress lines, each device as it finishes, then the list.
+	w, _ := f.do("POST", "/api/upgrade/dry", `{"hosts":["web01"],"stream":true}`)
+	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/x-ndjson" || len(lines) != 3 ||
+		!strings.Contains(lines[0], `"running":true`) || !strings.Contains(lines[1], `"summary":"would install"`) || !strings.HasPrefix(lines[2], `{"results":[`) {
+		t.Errorf("stream: %d %q", w.Code, lines)
+	}
+	// An error before any device is reached keeps its status code.
+	if w, _ := f.do("POST", "/api/upgrade/dry", `{"hosts":["ghost"],"stream":true}`); w.Code != 404 {
+		t.Errorf("stream ghost: %d %s", w.Code, w.Body)
+	}
+
 	// A second apply while one runs is refused.
 	done := make(chan int, 1)
 	go func() {
@@ -541,8 +577,12 @@ func TestUpgradeRoutes(t *testing.T) {
 		t.Errorf("concurrent apply: %d", w.Code)
 	}
 	close(release)
-	if code := <-done; code != 200 {
-		t.Errorf("first apply: %d", code)
+	if code := <-done; code != 200 || waited {
+		t.Errorf("first apply: %d, wait %v", code, waited)
+	}
+	go func() { <-started }()
+	if w, _ := f.do("POST", "/api/upgrade/apply", `{"hosts":["web01"],"confirm":true,"wait":true}`); w.Code != 200 || !waited {
+		t.Errorf("apply with wait: %d, wait %v", w.Code, waited)
 	}
 }
 

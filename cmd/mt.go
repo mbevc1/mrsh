@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"path"
 	"strconv"
@@ -29,6 +30,9 @@ var (
 	fileWaitInterval = 500 * time.Millisecond
 	updateWait       = 60 * time.Second
 	updatePoll       = 2 * time.Second
+	rebootSettle     = 15 * time.Second // let a device go down before redialling
+	rebootPoll       = 10 * time.Second
+	rebootWait       = 10 * time.Minute
 )
 
 func newMtCmd(opts *globalOptions) *cobra.Command {
@@ -283,15 +287,16 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 			"  1. a newer RouterOS on the channel: install it (the device reboots)\n" +
 			"  2. RouterOS current but routerboard firmware behind: upgrade firmware and reboot\n" +
 			"  3. otherwise: report up to date\n" +
-			"Run it again after devices come back to finish step 2.\n" +
-			"With --dry-run it only checks for updates and reports what it would do.",
+			"Run it again after devices come back to finish step 2, or use --wait to wait for\n" +
+			"each reboot (up to 10 minutes) and take every step in one run.\n" +
+			"With --dry-run it only checks for updates and reports the next step.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {
 				return err
 			}
-			dry := opts.dryRun
+			dry, wait := opts.dryRun, opts.wait && !opts.dryRun
 			if !dry && !opts.yes {
 				if err := confirmTargets(cmd, "upgrade (and reboot)", targets); err != nil {
 					return err
@@ -301,9 +306,20 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 			if err := prepareConnect(ctx, opts, targets); err != nil {
 				return err
 			}
-			results := runner.Execute(ctx, targets, opts.parallel, runner.WithConn(connOptions(opts),
-				func(ctx context.Context, conn *ssh.Conn, _ runner.Target, res *runner.Result) {
-					msg, err := upgradeOne(ctx, conn, dry)
+			co := connOptions(opts)
+			results := runner.Execute(ctx, targets, opts.parallel, runner.WithConn(co,
+				func(ctx context.Context, conn *ssh.Conn, t runner.Target, res *runner.Result) {
+					var msg string
+					var err error
+					if wait {
+						var out upgradeOutcome
+						out, err = upgradeThrough(ctx, conn, redialer(t, co), func(msg string) {
+							slog.Debug("upgrade", "host", t.Name, "step", msg)
+						})
+						msg = out.describe()
+					} else {
+						msg, err = upgradeOne(ctx, conn, dry)
+					}
 					if err != nil {
 						res.Err, res.ExitCode = err, -1
 						return
@@ -316,6 +332,7 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 			return outcome(ctx, results)
 		},
 	}
+	cmd.Flags().BoolVar(&opts.wait, "wait", false, "wait for each reboot and take every upgrade step in one run")
 	return cmd
 }
 
@@ -361,6 +378,98 @@ func upgradeOne(ctx context.Context, conn *ssh.Conn, dry bool) (string, error) {
 		}
 	}
 	return plan.describe(dry), nil
+}
+
+// errNotBack means a device did not answer SSH again after a reboot.
+var errNotBack = errors.New("did not come back after reboot")
+
+// maxUpgradeSteps bounds --wait: RouterOS, firmware, and one spare in case
+// the channel moves on during the run.
+const maxUpgradeSteps = 3
+
+// upgradeOutcome is what --wait did to one device: the steps taken, and the
+// last plan (up to date once every step is done).
+type upgradeOutcome struct {
+	Steps []string
+	Final upgradePlan
+}
+
+// describe is the --wait summary, e.g. "RouterOS 7.13 -> 7.14, firmware
+// 7.13 -> 7.14; up to date (RouterOS 7.14)".
+func (o upgradeOutcome) describe() string {
+	if len(o.Steps) == 0 {
+		return o.Final.describe(false)
+	}
+	return strings.Join(o.Steps, ", ") + "; " + o.Final.describe(false)
+}
+
+// redialer reconnects to t, for waiting out a reboot.
+func redialer(t runner.Target, o runner.ConnOptions) func(context.Context) (*ssh.Conn, error) {
+	return func(ctx context.Context) (*ssh.Conn, error) { return runner.Connect(ctx, t, o) }
+}
+
+// upgradeThrough takes every upgrade step on one device, waiting for it to
+// come back after each reboot, until a fresh check finds it up to date. An
+// error after some steps names them, since the device has changed. progress
+// hears what it is doing, e.g. "waiting for reboot after RouterOS ...".
+func upgradeThrough(ctx context.Context, conn *ssh.Conn, redial func(context.Context) (*ssh.Conn, error), progress func(string)) (upgradeOutcome, error) {
+	var out upgradeOutcome
+	fail := func(err error) (upgradeOutcome, error) {
+		if len(out.Steps) > 0 {
+			err = fmt.Errorf("after %s: %w", strings.Join(out.Steps, ", "), err)
+		}
+		return out, err
+	}
+	for {
+		plan, err := planUpgrade(ctx, conn)
+		if err != nil {
+			return fail(err)
+		}
+		out.Final = plan
+		if plan.Action == upgradeNone {
+			return out, nil
+		}
+		if len(out.Steps) == maxUpgradeSteps {
+			return fail(fmt.Errorf("still not up to date: %s", plan.describe(true)))
+		}
+		step, doing := fmt.Sprintf("firmware %s -> %s", plan.FirmwareRB, plan.UpgradeFW), "upgrading "
+		if plan.Action == upgradeInstall {
+			step, doing = fmt.Sprintf("RouterOS %s -> %s", plan.Installed, plan.Latest), "installing "
+		}
+		progress(doing + step)
+		if err := applyUpgrade(ctx, conn, plan); err != nil {
+			return fail(err)
+		}
+		out.Steps = append(out.Steps, step)
+		progress("waiting for reboot after " + strings.Join(out.Steps, ", "))
+		_ = conn.Close() // the reboot ended the session
+		if conn, err = waitBack(ctx, redial); err != nil {
+			return fail(err)
+		}
+		defer func() { _ = conn.Close() }()
+		progress("back after " + strings.Join(out.Steps, ", ") + "; checking for updates")
+	}
+}
+
+// waitBack redials a rebooting device until it answers or rebootWait passes.
+func waitBack(ctx context.Context, redial func(context.Context) (*ssh.Conn, error)) (*ssh.Conn, error) {
+	deadline := time.Now().Add(rebootWait)
+	pause := rebootSettle
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pause):
+		}
+		conn, err := redial(ctx)
+		if err == nil {
+			return conn, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%w within %s (last try: %v)", errNotBack, rebootWait, err)
+		}
+		pause = rebootPoll
+	}
 }
 
 // planUpgrade checks the channel and firmware without changing the device

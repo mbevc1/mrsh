@@ -87,26 +87,30 @@
   </section>
 
   <section id="tab-test" hidden>
-    <p class="hint">Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</p>
+    <p class="hint note"><svg class="hint-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg><span>Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</span></p>
     <div class="toolbar">
       <select id="test-group" aria-label="Hosts to test"><option value="">All groups</option></select>
-      <button id="test-run" type="button">Test hosts</button>
+      <button id="test-run" type="button">Test selected</button>
       <span class="count" id="test-count"></span>
     </div>
     <div class="table-wrap">
       <table class="test-table">
-        <thead><tr><th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th></tr></thead>
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="test-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
         <tbody id="test-rows"></tbody>
       </table>
     </div>
   </section>
 
   <section id="tab-upgrade" hidden>
-    <p class="hint warn"><svg class="warn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg><span>Upgrade runs the same step as <code>mrsh mt upgrade</code> on each ticked device: install a newer RouterOS, otherwise upgrade routerboard firmware, then reboot. Run it again after devices come back to take the next step. Dry run only reports what it would do.</span></p>
+    <p class="hint warn"><svg class="hint-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg><span>Runs the next <code>mrsh mt upgrade</code> step on each ticked device: a newer RouterOS, otherwise routerboard firmware, then a reboot. <em>Finish all steps</em> waits through the reboots and takes every step, like <code>--wait</code>. Dry run changes nothing.</span></p>
     <div class="toolbar">
       <select id="upgrade-group" aria-label="Hosts to upgrade"><option value="">All groups</option></select>
       <button id="upgrade-dry" type="button" class="ghost">Dry run</button>
       <button id="upgrade-run" type="button" class="danger-fill">Upgrade selected</button>
+      <label class="check"><input id="upgrade-wait" type="checkbox"> Finish all steps (waits for reboots)</label>
       <span class="count" id="upgrade-count"></span>
     </div>
     <div class="table-wrap">

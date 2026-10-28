@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mbevc1/mrsh/internal/config"
 	"github.com/mbevc1/mrsh/internal/mt"
+	"github.com/mbevc1/mrsh/internal/runner"
+	"github.com/mbevc1/mrsh/internal/ssh"
 	"github.com/mbevc1/mrsh/internal/sshtest"
 )
 
@@ -26,9 +31,10 @@ type fakeRouter struct {
 	mu   sync.Mutex
 	cmds []string
 
-	update    []string // successive UpdateStatusCmd replies
-	rb        string
-	exportErr string
+	update        []string // successive UpdateStatusCmd replies
+	rb            string
+	rbAfterReboot string // rb once a reboot applies the firmware, if set
+	exportErr     string
 }
 
 func (f *fakeRouter) exec(cmd string) sshtest.Reply {
@@ -51,6 +57,9 @@ func (f *fakeRouter) exec(cmd string) sshtest.Reply {
 	case cmd == mt.EnsureBackupDirCmd:
 		_ = os.MkdirAll(filepath.Join(f.root, mt.BackupDir), 0o700)
 	case cmd == mt.RebootCmd, cmd == mt.InstallUpdatesCmd:
+		if cmd == mt.RebootCmd && f.rbAfterReboot != "" {
+			f.rb = f.rbAfterReboot
+		}
 		return sshtest.Reply{Drop: true}
 	case cmd == mt.UpdateStatusCmd:
 		out := f.update[0]
@@ -97,7 +106,16 @@ func startRouter(t *testing.T) (*fakeRouter, string) {
 	oldNow, oldInterval, oldPoll := now, fileWaitInterval, updatePoll
 	now, fileWaitInterval, updatePoll = func() time.Time { return monday }, 5*time.Millisecond, 5*time.Millisecond
 	t.Cleanup(func() { now, fileWaitInterval, updatePoll = oldNow, oldInterval, oldPoll })
+	fastReboots(t, time.Second)
 	return f, cfg
+}
+
+// fastReboots shortens the --wait timers, giving up after wait.
+func fastReboots(t *testing.T, wait time.Duration) {
+	t.Helper()
+	oldSettle, oldPoll, oldWait := rebootSettle, rebootPoll, rebootWait
+	rebootSettle, rebootPoll, rebootWait = time.Millisecond, 5*time.Millisecond, wait
+	t.Cleanup(func() { rebootSettle, rebootPoll, rebootWait = oldSettle, oldPoll, oldWait })
 }
 
 func TestMtBackupBothFormats(t *testing.T) {
@@ -251,6 +269,92 @@ func TestMtUpgradeFirmwareStep(t *testing.T) {
 	f.rb = "current-firmware: 7.14\nupgrade-firmware: 7.14\n"
 	if out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y"); err != nil || !strings.Contains(out, "up to date (RouterOS 7.14)") {
 		t.Errorf("up to date: err=%v\n%s", err, out)
+	}
+}
+
+// needsBoth is a router one RouterOS release and one firmware behind.
+func needsBoth(f *fakeRouter) {
+	f.update = []string{
+		"installed-version: 7.13.2\nlatest-version: 7.14\nstatus: New version is available\n",
+		"installed-version: 7.14\nlatest-version: 7.14\nstatus: System is already up to date\n",
+	}
+	f.rbAfterReboot = "current-firmware: 7.14\nupgrade-firmware: 7.14\n"
+}
+
+func TestMtUpgradeWaitTakesEveryStep(t *testing.T) {
+	f, cfg := startRouter(t)
+	needsBoth(f)
+	out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y", "--wait")
+	want := "RouterOS 7.13.2 -> 7.14, firmware 7.13.2 -> 7.14; up to date (RouterOS 7.14)"
+	if err != nil || !strings.Contains(out, want) {
+		t.Fatalf("err=%v, want %q in\n%s", err, want, out)
+	}
+	for _, c := range []string{mt.InstallUpdatesCmd, mt.FirmwareUpgrade, mt.RebootCmd} {
+		if !f.sentContains(c) {
+			t.Errorf("%q not sent: %v", c, f.sent())
+		}
+	}
+
+	// Without --wait the same device takes one step, as before.
+	f, cfg = startRouter(t)
+	needsBoth(f)
+	if out, err := execRoot(t, "-f", cfg, "mt", "upgrade", "-y"); err != nil || !strings.Contains(out, "installing RouterOS 7.13.2 -> 7.14") || f.sentContains(mt.FirmwareUpgrade) {
+		t.Errorf("one step: err=%v %v\n%s", err, f.sent(), out)
+	}
+
+	// --dry-run wins over --wait: nothing changes.
+	f, cfg = startRouter(t)
+	needsBoth(f)
+	if out, err := execRoot(t, "-f", cfg, "--dry-run", "mt", "upgrade", "--wait"); err != nil || !strings.Contains(out, "would install") || f.sentContains(mt.InstallUpdatesCmd) {
+		t.Errorf("dry run: err=%v %v\n%s", err, f.sent(), out)
+	}
+}
+
+func TestUpgradeThroughDeviceNotBack(t *testing.T) {
+	fastReboots(t, 30*time.Millisecond)
+	f := &fakeRouter{root: t.TempDir(), rb: rbSample}
+	needsBoth(f)
+	srv := sshtest.Start(t, sshtest.Options{User: "admin", Password: "pw", Exec: f.exec})
+	target := runner.Target{Host: config.Host{Name: "rt1", Host: srv.Host, Port: srv.Port}, Secrets: config.Secrets{User: "admin", Pass: "pw"}}
+	ctx := context.Background()
+	conn, err := runner.Connect(ctx, target, runner.ConnOptions{Timeout: 5 * time.Second, HostKeys: &ssh.HostKeyChecker{}, Policy: config.HostKeyInsecure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dials := 0
+	down := func(context.Context) (*ssh.Conn, error) {
+		dials++
+		return nil, errors.New("connect: connection refused")
+	}
+
+	var heard []string
+	out, err := upgradeThrough(ctx, conn, down, func(msg string) { heard = append(heard, msg) })
+	if !errors.Is(err, errNotBack) || !strings.HasPrefix(err.Error(), "after RouterOS 7.13.2 -> 7.14: did not come back") {
+		t.Fatalf("err = %v", err)
+	}
+	if want := []string{"installing RouterOS 7.13.2 -> 7.14", "waiting for reboot after RouterOS 7.13.2 -> 7.14"}; fmt.Sprint(heard) != fmt.Sprint(want) {
+		t.Errorf("progress = %q, want %q", heard, want)
+	}
+	if len(out.Steps) != 1 || dials < 2 || f.sentContains(mt.FirmwareUpgrade) {
+		t.Errorf("steps %v, dials %d, sent %v", out.Steps, dials, f.sent())
+	}
+	if got := shortError(err); got != "did not come back after reboot" {
+		t.Errorf("shortError = %q", got)
+	}
+}
+
+func TestWaitBackStopsOnCancel(t *testing.T) {
+	fastReboots(t, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	dials := 0
+	_, err := waitBack(ctx, func(context.Context) (*ssh.Conn, error) {
+		if dials++; dials == 3 {
+			cancel()
+		}
+		return nil, errors.New("refused")
+	})
+	if !errors.Is(err, context.Canceled) || dials != 3 {
+		t.Errorf("err = %v after %d dials", err, dials)
 	}
 }
 

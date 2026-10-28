@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,6 +60,9 @@ func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.C
 	if name, v, ok, err := oneOf(cmd, passFlags); err != nil {
 		return false, err
 	} else if ok {
+		if name == "pass" {
+			slog.Warn("--pass stores the password in the config in the clear; prefer --pass-env or --pass-arn")
+		}
 		c.Pass, c.PassEnv, c.PassARN = "", "", ""
 		switch name {
 		case "pass":

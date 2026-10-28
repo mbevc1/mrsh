@@ -17,14 +17,15 @@ import (
 func newCredentialsCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "credentials",
-		Aliases: []string{"creds", "cred"},
+		Aliases: []string{"creds", "cred", "identities", "identity", "ids"},
 		Short:   "Manage reusable credential sets (user, pass, identity file)",
 		Long: "A credential set is a named user/pass/identity_file that hosts and defaults reference\n" +
 			"with `credential: NAME` (or hosts add/update --credential NAME). For each of user, pass\n" +
 			"and identity file, a host uses its own value, else its set's, else defaults', else the\n" +
 			"set named in defaults.",
 	}
-	cmd.AddCommand(newCredentialsListCmd(opts), newCredentialsSetCmd(opts), newCredentialsRemoveCmd(opts))
+	cmd.AddCommand(newCredentialsListCmd(opts), newCredentialsSetCmd(opts), newCredentialsRemoveCmd(opts),
+		newCredentialsDefaultCmd(opts), newCredentialsAssignCmd(opts), newCredentialsRenameCmd(opts))
 	return cmd
 }
 
@@ -177,6 +178,186 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "credential set name")
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
+	return cmd
+}
+
+func newCredentialsDefaultCmd(opts *globalOptions) *cobra.Command {
+	var clear bool
+	cmd := &cobra.Command{
+		Use:   "default [NAME]",
+		Short: "Show, set or --clear the credential set used by defaults",
+		Long: "With no argument, print the set defaults use. With NAME, make every host that sets\n" +
+			"no user, pass or identity file of its own (and has no set of its own) fall back to it.",
+		Args: cobra.MaximumNArgs(1),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return completeCredentials(opts)(cmd, args, toComplete)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 && !clear {
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), dash(lc.cfg.Defaults.Credential))
+				return err
+			}
+			if len(args) == 1 && clear {
+				return errors.New("give a NAME or --clear, not both")
+			}
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			store, err := openStore(opts)
+			if err != nil {
+				return err
+			}
+			err = config.Mutate(cmd.Context(), store, func(d *config.Document, _ *config.Config) error {
+				return d.SetDefaultCredential(name)
+			})
+			if err != nil {
+				return err
+			}
+			msg := fmt.Sprintf("defaults now use credential %s", name)
+			if name == "" {
+				msg = "defaults no longer use a credential set"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s in %s\n", msg, store.Location())
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&clear, "clear", false, "stop defaults using a credential set")
+	return cmd
+}
+
+func newCredentialsAssignCmd(opts *globalOptions) *cobra.Command {
+	var name string
+	var clear bool
+	cmd := &cobra.Command{
+		Use:   "assign (--name NAME | --clear) {-g GROUP | -H HOST}...",
+		Short: "Point many hosts at a credential set (or --clear it) by group or name",
+		Long: "Set credential: NAME on every config host selected by the global -g/--group and\n" +
+			"-H/--host flags (config names or addresses; literal addresses are refused). Each\n" +
+			"host's own user, pass and identity file are left as they are, and still win.",
+		Example: "  mrsh credentials assign --name routers -g routers\n" +
+			"  mrsh credentials assign --clear -H rb01,rb02",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if (name == "") == !clear {
+				return errors.New("give --name NAME or --clear")
+			}
+			if opts.group == "" && len(opts.hosts) == 0 {
+				return errors.New("select hosts with -g/--group and/or -H/--host")
+			}
+			store, err := openStore(opts)
+			if err != nil {
+				return err
+			}
+			var changed []string
+			err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
+				changed = changed[:0]
+				hosts, unmatched := cfg.Select(opts.group, opts.hosts)
+				if len(unmatched) > 0 {
+					return fmt.Errorf("not in the config: %s", strings.Join(unmatched, ", "))
+				}
+				if len(hosts) == 0 {
+					return errors.New("no hosts selected")
+				}
+				for _, h := range hosts {
+					if h.Credential == name {
+						continue
+					}
+					h.Credential = name
+					if err := d.ReplaceHost(h.Name, h); err != nil {
+						return err
+					}
+					changed = append(changed, h.Name)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			verb := "assigned credential " + name + " to"
+			if clear {
+				verb = "cleared the credential set on"
+			}
+			if len(changed) == 0 {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "nothing to change in %s\n", store.Location())
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %d host(s) in %s: %s\n", verb, len(changed), store.Location(), strings.Join(changed, ", "))
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "credential set to assign")
+	cmd.Flags().BoolVar(&clear, "clear", false, "remove the credential set from the selected hosts")
+	cmd.MarkFlagsMutuallyExclusive("name", "clear")
+	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
+	return cmd
+}
+
+func newCredentialsRenameCmd(opts *globalOptions) *cobra.Command {
+	var name, to string
+	cmd := &cobra.Command{
+		Use:   "rename --name OLD --to NEW",
+		Short: "Rename a credential set and update every host and defaults that use it",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			store, err := openStore(opts)
+			if err != nil {
+				return err
+			}
+			var moved []string
+			err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
+				moved = cfg.CredentialUsers(name)
+				set, ok := cfg.Credentials[name]
+				if !ok {
+					return fmt.Errorf("%w: %s", config.ErrCredentialNotFound, name)
+				}
+				if _, taken := cfg.Credentials[to]; taken {
+					return fmt.Errorf("credential %s already exists", to)
+				}
+				if err := d.SetCredential(to, set); err != nil {
+					return err
+				}
+				if err := d.RemoveCredential(name); err != nil {
+					return err
+				}
+				if cfg.Defaults.Credential == name {
+					if err := d.SetDefaultCredential(to); err != nil {
+						return err
+					}
+				}
+				for _, h := range cfg.Hosts {
+					if h.Credential == name {
+						h.Credential = to
+						if err := d.ReplaceHost(h.Name, h); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			users := "no references"
+			if len(moved) > 0 {
+				users = "updated " + strings.Join(moved, ", ")
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "renamed credential %s to %s in %s (%s)\n", name, to, store.Location(), users)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "current name")
+	cmd.Flags().StringVar(&to, "to", "", "new name")
+	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("to")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
 	return cmd
 }

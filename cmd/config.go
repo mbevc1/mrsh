@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -61,6 +62,7 @@ func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) 
 	// inherits; a per-host known_hosts still wins.
 	cfg.Defaults.KnownHosts = opts.knownHosts
 	opts.hostKeyPolicySet = cmd.Flags().Changed("host-key-policy") || cfg.Defaults.HostKeyPolicy != ""
+	warnLiteralPasswords(cfg, store.Location(), version)
 	slog.Debug("config loaded", "path", store.Location(), "source", sourceKind(opts.config),
 		"hosts", len(cfg.Hosts), "parallel", opts.parallel, "timeout", opts.timeout, "output", opts.output)
 	return &loadedConfig{cfg: cfg, store: store, version: version}, nil
@@ -102,7 +104,7 @@ func applyDefaults(cmd *cobra.Command, opts *globalOptions, raw []byte) error {
 	debug := v.GetBool("defaults.debug")
 	if debug != opts.debug {
 		opts.debug = debug
-		setupLogging(cmd.ErrOrStderr(), debug)
+		setupLogging(cmd.ErrOrStderr(), debug, opts.quiet)
 	}
 	if opts.parallel < 1 {
 		return fmt.Errorf("parallel must be at least 1, got %d", opts.parallel)
@@ -123,4 +125,27 @@ func sourceKind(uri string) string {
 		return "s3"
 	}
 	return "local"
+}
+
+// literalWarned remembers configs already warned about, so a long-running
+// mrsh ui repeats the warning only after the config changes.
+var literalWarned sync.Map // location + "@" + version -> struct{}
+
+// warnLiteralPasswords warns when the config stores passwords in the clear
+// (a literal pass rather than pass_env or pass_arn), naming where.
+func warnLiteralPasswords(cfg *config.Config, location, version string) {
+	places := config.LiteralPasswords(cfg)
+	if len(places) == 0 {
+		return
+	}
+	if _, seen := literalWarned.LoadOrStore(location+"@"+version, struct{}{}); seen {
+		return
+	}
+	const show = 5
+	where := strings.Join(places[:min(len(places), show)], ", ")
+	if len(places) > show {
+		where += fmt.Sprintf(" and %d more", len(places)-show)
+	}
+	slog.Warn(fmt.Sprintf("%s stores %d literal password(s) (%s); use pass_env or pass_arn so the file holds no secrets",
+		location, len(places), where))
 }

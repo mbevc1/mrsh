@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mbevc1/mrsh/internal/config"
 	"github.com/mbevc1/mrsh/internal/sshtest"
 )
 
@@ -89,4 +90,89 @@ hosts:
 	if exitCode(err) != exitHostFailed {
 		t.Errorf("exit = %d (%v)", exitCode(err), err)
 	}
+}
+
+func TestCredentialsDefaultAssignRename(t *testing.T) {
+	cfg := writeConfig(t, `# keep me
+defaults:
+  port: 22 # ssh
+credentials:
+  lab: {user: admin, pass_env: LAB_PASS}
+hosts:
+  - {name: rt1, host: 10.0.0.1, group: routers}
+  - {name: rt2, host: 10.0.0.2, group: routers}
+  - {name: web, host: 10.0.0.3, group: web}
+`)
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := execRoot(t, append([]string{"-f", cfg}, args...)...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		return out
+	}
+
+	// identities is an alias; default shows "-" when unset, then sets it.
+	if out := run("identities", "default"); strings.TrimSpace(out) != "-" {
+		t.Errorf("default (unset) = %q", out)
+	}
+	run("ids", "default", "lab")
+	if out := run("credentials", "default"); strings.TrimSpace(out) != "lab" {
+		t.Errorf("default = %q", out)
+	}
+	if body := readFile(t, cfg); !strings.Contains(body, "# keep me") || !strings.Contains(body, "port: 22 # ssh") {
+		t.Errorf("defaults comments lost:\n%s", body)
+	}
+	if _, err := execRoot(t, "-f", cfg, "credentials", "default", "nope"); err == nil {
+		t.Error("default to an unknown set accepted")
+	}
+
+	// assign by group, then clear by name.
+	if out := run("credentials", "assign", "--name", "lab", "-g", "routers"); !strings.Contains(out, "to 2 host(s)") || !strings.Contains(out, "rt1, rt2") {
+		t.Errorf("assign: %s", out)
+	}
+	if out := run("credentials", "assign", "--name", "lab", "-g", "routers"); !strings.Contains(out, "nothing to change") {
+		t.Errorf("assign again: %s", out)
+	}
+	if out := run("credentials", "assign", "--clear", "-H", "rt2"); !strings.Contains(out, "cleared the credential set on 1 host(s)") {
+		t.Errorf("clear: %s", out)
+	}
+	for _, args := range [][]string{
+		{"credentials", "assign", "--name", "lab"},                         // no selection
+		{"credentials", "assign", "-g", "routers"},                         // no --name/--clear
+		{"credentials", "assign", "--name", "lab", "--clear", "-H", "rt1"}, // both
+		{"credentials", "assign", "--name", "lab", "-H", "10.9.9.9"},       // literal address
+	} {
+		if _, err := execRoot(t, append([]string{"-f", cfg}, args...)...); err == nil {
+			t.Errorf("%v accepted", args)
+		}
+	}
+
+	// rename moves the set and every reference in one save.
+	if out := run("credentials", "rename", "--name", "lab", "--to", "routers"); !strings.Contains(out, "updated defaults, rt1") {
+		t.Errorf("rename: %s", out)
+	}
+	c := loadTestConfig(t, cfg)
+	if _, ok := c.Credentials["routers"]; !ok || len(c.Credentials) != 1 || c.Defaults.Credential != "routers" ||
+		c.Hosts[0].Credential != "routers" || c.Hosts[1].Credential != "" {
+		t.Errorf("after rename: defaults=%q hosts=%+v sets=%v", c.Defaults.Credential, c.Hosts, c.Credentials)
+	}
+	if _, err := execRoot(t, "-f", cfg, "credentials", "rename", "--name", "nope", "--to", "x"); err == nil {
+		t.Error("rename of a missing set accepted")
+	}
+
+	// Clearing the default.
+	run("credentials", "default", "--clear")
+	if c := loadTestConfig(t, cfg); c.Defaults.Credential != "" || c.Defaults.Port != 22 {
+		t.Errorf("after clear: %+v", c.Defaults)
+	}
+}
+
+func loadTestConfig(t *testing.T, path string) *config.Config {
+	t.Helper()
+	c, err := config.Parse([]byte(readFile(t, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

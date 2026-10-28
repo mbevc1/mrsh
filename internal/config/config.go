@@ -211,6 +211,26 @@ func (c *Config) checkCredentialRef(name string) error {
 	return nil
 }
 
+// LiteralPasswords lists where the config stores a password in the clear:
+// "defaults", "credential NAME" or "host NAME".
+func LiteralPasswords(c *Config) []string {
+	var places []string
+	if c.Defaults.Pass != "" {
+		places = append(places, "defaults")
+	}
+	for _, name := range sortedKeys(c.Credentials) {
+		if c.Credentials[name].Pass != "" {
+			places = append(places, "credential "+name)
+		}
+	}
+	for _, h := range c.Hosts {
+		if h.Pass != "" {
+			places = append(places, "host "+h.Name)
+		}
+	}
+	return places
+}
+
 // CredentialUsers returns who references the named set: host names in
 // config order, plus "defaults".
 func (c *Config) CredentialUsers(name string) []string {

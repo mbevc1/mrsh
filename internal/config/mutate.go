@@ -187,6 +187,51 @@ func (d *Document) SetCredential(name string, set CredentialSet) error {
 	return nil
 }
 
+// SetDefaultCredential sets (or with "" removes) defaults.credential,
+// editing the defaults mapping in place so its other keys and comments stay.
+func (d *Document) SetDefaultCredential(name string) error {
+	m := d.root.Content[0]
+	var defs *yaml.Node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "defaults" {
+			defs = m.Content[i+1]
+		}
+	}
+	if defs == nil || (defs.Kind == yaml.ScalarNode && defs.Tag == "!!null") {
+		if name == "" {
+			return nil
+		}
+		if defs == nil {
+			defs = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			if err := d.setTop("defaults", defs, 0); err != nil {
+				return err
+			}
+		} else {
+			*defs = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		}
+	}
+	if defs.Kind != yaml.MappingNode {
+		return errors.New("config: defaults must be a mapping")
+	}
+	for i := 0; i+1 < len(defs.Content); i += 2 {
+		if defs.Content[i].Value == "credential" {
+			if name == "" {
+				defs.Content = append(defs.Content[:i], defs.Content[i+2:]...)
+			} else {
+				defs.Content[i+1].Value, defs.Content[i+1].Tag, defs.Content[i+1].Style = name, "!!str", 0
+			}
+			return nil
+		}
+	}
+	if name != "" {
+		defs.Content = append([]*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "credential"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+		}, defs.Content...)
+	}
+	return nil
+}
+
 // RemoveCredential deletes the named set, and the credentials section once
 // it is empty. References to it are left for Validate to report.
 func (d *Document) RemoveCredential(name string) error {

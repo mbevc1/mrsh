@@ -301,3 +301,35 @@ func TestCredentialSetDocument(t *testing.T) {
 		t.Errorf("remove missing: %v", err)
 	}
 }
+
+func TestSetDefaultCredential(t *testing.T) {
+	for _, start := range []string{
+		"credentials:\n  lab: {user: a}\nhosts: []\n",            // no defaults block
+		"defaults:\ncredentials:\n  lab: {user: a}\nhosts: []\n", // empty (null) defaults
+		"defaults:\n  port: 22 # ssh\ncredentials:\n  lab: {user: a}\nhosts: []\n",
+	} {
+		d := mustDoc(t, start)
+		if err := d.SetDefaultCredential("lab"); err != nil {
+			t.Fatal(err)
+		}
+		c, out := reparse(t, d)
+		if c.Defaults.Credential != "lab" || c.Validate() != nil {
+			t.Errorf("set from %q:\n%s", start, out)
+		}
+		if strings.Contains(start, "# ssh") && !strings.Contains(out, "port: 22 # ssh") {
+			t.Errorf("comment lost:\n%s", out)
+		}
+		if err := d.SetDefaultCredential("lab2"); err != nil {
+			t.Fatal(err)
+		}
+		if c, _ = reparse(t, d); c.Defaults.Credential != "lab2" {
+			t.Errorf("replace: %q", c.Defaults.Credential)
+		}
+		if err := d.SetDefaultCredential(""); err != nil {
+			t.Fatal(err)
+		}
+		if c, out = reparse(t, d); c.Defaults.Credential != "" || strings.Contains(out, "credential:") {
+			t.Errorf("clear:\n%s", out)
+		}
+	}
+}

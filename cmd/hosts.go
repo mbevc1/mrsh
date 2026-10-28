@@ -97,10 +97,11 @@ func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 
 func newHostsExampleCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "example",
-		Short: "Print an annotated example config",
-		Long:  "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
-		Args:  cobra.NoArgs,
+		Use:     "example",
+		Aliases: []string{"ex"},
+		Short:   "Print an annotated example config",
+		Long:    "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := cmd.OutOrStdout().Write(config.Example)
 			return err

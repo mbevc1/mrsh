@@ -278,8 +278,9 @@ func expectDisconnect(stdout, stderr string, code int, err error) error {
 
 func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "upgrade",
-		Short: "Check and install RouterOS updates, then routerboard firmware",
+		Use:     "upgrade",
+		Aliases: []string{"up"},
+		Short:   "Check and install RouterOS updates, then routerboard firmware",
 		Long: "Each run takes one step per device, since each step ends in a reboot:\n" +
 			"  1. a newer RouterOS on the channel: install it (the device reboots)\n" +
 			"  2. RouterOS current but routerboard firmware behind: upgrade firmware and reboot\n" +

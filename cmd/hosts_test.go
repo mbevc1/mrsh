@@ -169,7 +169,7 @@ func TestSubcommandAliases(t *testing.T) {
 		"h u": "hosts update", "h up": "hosts update", "h r": "hosts remove", "h rm": "hosts remove",
 		"creds ls": "credentials list", "creds l": "credentials list", "creds s": "credentials set",
 		"creds r": "credentials remove", "creds rm": "credentials remove", "creds ass": "credentials assign",
-		"mt b": "mt backup", "mt ba": "mt backup", "mt bck": "mt backup",
+		"mt b": "mt backup", "mt ba": "mt backup", "mt bck": "mt backup", "mt up": "mt upgrade",
 	} {
 		c, _, err := root.Find(strings.Fields(alias))
 		if got := strings.TrimPrefix(c.CommandPath(), "mrsh "); err != nil || got != want {

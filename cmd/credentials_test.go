@@ -112,11 +112,11 @@ hosts:
 		return out
 	}
 
-	// identities is an alias; default shows "-" when unset, then sets it.
-	if out := run("identities", "default"); strings.TrimSpace(out) != "-" {
+	// default shows "-" when unset, then sets it (also via the creds alias).
+	if out := run("credentials", "default"); strings.TrimSpace(out) != "-" {
 		t.Errorf("default (unset) = %q", out)
 	}
-	run("ids", "default", "lab")
+	run("creds", "default", "lab")
 	if out := run("credentials", "default"); strings.TrimSpace(out) != "lab" {
 		t.Errorf("default = %q", out)
 	}
@@ -175,4 +175,18 @@ func loadTestConfig(t *testing.T, path string) *config.Config {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestCredentialsAliases(t *testing.T) {
+	root := newRootCmd()
+	for _, alias := range []string{"creds", "cred"} {
+		if c, _, err := root.Find([]string{alias}); err != nil || c.Name() != "credentials" {
+			t.Errorf("%s -> %v, %v", alias, c, err)
+		}
+	}
+	for _, gone := range []string{"identities", "identity", "ids"} {
+		if c, _, _ := root.Find([]string{gone}); c != nil && c.Name() == "credentials" {
+			t.Errorf("%s still resolves to credentials", gone)
+		}
+	}
 }

@@ -17,7 +17,7 @@ import (
 func newCredentialsCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "credentials",
-		Aliases: []string{"creds", "cred", "identities", "identity", "ids"},
+		Aliases: []string{"creds", "cred"},
 		Short:   "Manage reusable credential sets (user, pass, identity file)",
 		Long: "A credential set is a named user/pass/identity_file that hosts and defaults reference\n" +
 			"with `credential: NAME` (or hosts add/update --credential NAME). For each of user, pass\n" +

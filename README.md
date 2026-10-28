@@ -26,7 +26,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | Command | What it does |
 |---------|--------------|
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
-| `credentials list\|set\|remove\|rename\|default\|assign` (aliases `creds`, `identities`, `ids`) | Manage reusable credential sets (user, pass, identity file): `default NAME` sets the one `defaults` uses, `assign --name NAME -g GROUP` (or `-H HOST`, or `--clear`) points many hosts at one, `rename` updates every reference. See [Secrets](#secrets). |
+| `credentials list\|set\|remove\|rename\|default\|assign` (aliases `creds`, `cred`) | Manage reusable credential sets (user, pass, identity file): `default NAME` sets the one `defaults` uses, `assign --name NAME -g GROUP` (or `-H HOST`, or `--clear`) points many hosts at one, `rename` updates every reference. See [Secrets](#secrets). |
 | `hosts init\|example\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. |
 | `mt backup` | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `-y` / `--assume-yes`. |
@@ -53,7 +53,7 @@ For each host, in `defaults` and in each credential set, set at most one form of
 
 `identity_file` (an SSH private key) can be set the same places, as a path.
 
-Credential sets bundle a login (user, pass and optionally `identity_file`) for reuse: define them under `credentials:` and reference one with `credential: NAME` on a host or in `defaults` (or `mrsh hosts add/update --credential NAME`). For each of user, pass and identity file, a host uses its own value, else its set's, else `defaults`, else the set named in `defaults`, so a host can share a set and still override one field. `mrsh credentials` (aliases `creds`, `identities`, `ids`) manages them, as does the UI's Credentials tab; a set in use cannot be removed:
+Credential sets bundle a login (user, pass and optionally `identity_file`) for reuse: define them under `credentials:` and reference one with `credential: NAME` on a host or in `defaults` (or `mrsh hosts add/update --credential NAME`). For each of user, pass and identity file, a host uses its own value, else its set's, else `defaults`, else the set named in `defaults`, so a host can share a set and still override one field. `mrsh credentials` (aliases `creds`, `cred`) manages them, as does the UI's Credentials tab; a set in use cannot be removed:
 
 ```bash
 mrsh creds set --name routers -u admin --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers

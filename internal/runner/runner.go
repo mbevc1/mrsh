@@ -147,6 +147,8 @@ type Result struct {
 	Stderr   string        `json:"stderr"`
 	Duration time.Duration `json:"-"`
 	Err      error         `json:"-"`
+	// Data carries a job-specific payload (such as a parsed version).
+	Data any `json:"-"`
 }
 
 // Failed reports whether the host errored or exited non-zero.
@@ -202,6 +204,53 @@ func fillMeta(r *Result, t Target) {
 	r.Name, r.Host, r.Group, r.Port = t.Name, t.Host.Host, t.Group, t.Port
 }
 
+// ConnOptions configure how jobs connect.
+type ConnOptions struct {
+	Timeout  time.Duration
+	HostKeys *ssh.HostKeyChecker
+	Policy   string
+}
+
+// Connect dials and authenticates to t.
+func Connect(ctx context.Context, t Target, o ConnOptions) (*ssh.Conn, error) {
+	verifier, err := o.HostKeys.ForPolicy(o.Policy, t.KnownHosts)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.Dial(ctx, ssh.Config{
+		Host:     t.Host.Host,
+		Port:     t.Port,
+		User:     loginUser(t.Secrets.User),
+		Pass:     t.Secrets.Pass,
+		KeyFile:  t.IdentityFile,
+		Timeout:  o.Timeout,
+		HostKeys: verifier,
+	})
+}
+
+// ConnJob is work done over an open connection. It fills res; a
+// connection failure is already handled by WithConn.
+type ConnJob func(ctx context.Context, conn *ssh.Conn, t Target, res *Result)
+
+// WithConn returns a Job that connects, runs fn, and closes. The result
+// starts at ExitCode 0; fn sets errors or exit codes as needed.
+func WithConn(o ConnOptions, fn ConnJob) Job {
+	return func(ctx context.Context, t Target) Result {
+		start := time.Now()
+		res := Result{ExitCode: -1}
+		conn, err := Connect(ctx, t, o)
+		if err != nil {
+			res.Err, res.Duration = err, time.Since(start)
+			return res
+		}
+		defer func() { _ = conn.Close() }()
+		res.ExitCode = 0
+		fn(ctx, conn, t, &res)
+		res.Duration = time.Since(start)
+		return res
+	}
+}
+
 // CommandOptions configure RunCommand.
 type CommandOptions struct {
 	Command  string
@@ -214,37 +263,14 @@ type CommandOptions struct {
 // RunCommand returns a Job that dials the target, runs the command and
 // closes the connection.
 func RunCommand(o CommandOptions) Job {
-	return func(ctx context.Context, t Target) Result {
-		start := time.Now()
-		res := Result{ExitCode: -1}
-		verifier, err := o.HostKeys.ForPolicy(o.Policy, t.KnownHosts)
-		if err != nil {
-			res.Err = err
-			return res
-		}
-		conn, err := ssh.Dial(ctx, ssh.Config{
-			Host:     t.Host.Host,
-			Port:     t.Port,
-			User:     loginUser(t.Secrets.User),
-			Pass:     t.Secrets.Pass,
-			KeyFile:  t.IdentityFile,
-			Timeout:  o.Timeout,
-			HostKeys: verifier,
-		})
-		if err != nil {
-			res.Err, res.Duration = err, time.Since(start)
-			return res
-		}
-		defer func() { _ = conn.Close() }()
-
+	co := ConnOptions{Timeout: o.Timeout, HostKeys: o.HostKeys, Policy: o.Policy}
+	return WithConn(co, func(ctx context.Context, conn *ssh.Conn, _ Target, res *Result) {
 		var stdin io.Reader // a nil *bytes.Reader would not be a nil io.Reader
 		if o.Stdin != nil {
 			stdin = bytes.NewReader(o.Stdin)
 		}
 		res.Stdout, res.Stderr, res.ExitCode, res.Err = conn.Run(ctx, o.Command, stdin)
-		res.Duration = time.Since(start)
-		return res
-	}
+	})
 }
 
 // loginUser falls back to the local username, as OpenSSH does.

@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	gliderssh "github.com/gliderlabs/ssh"
+	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -26,6 +28,18 @@ type Options struct {
 	KeyboardInteractive bool   // answer with Password via keyboard-interactive instead
 	AuthorizedKey       gossh.PublicKey
 	HostSigners         []gossh.Signer // default: one fresh ed25519 key
+	// Exec, when set, answers commands instead of the local shell.
+	Exec func(cmd string) Reply
+	// SFTPRoot, when set, serves SFTP rooted at this directory.
+	SFTPRoot string
+}
+
+// Reply is a scripted command result. Drop closes the session without an
+// exit status, as a rebooting device does.
+type Reply struct {
+	Stdout, Stderr string
+	Code           int
+	Drop           bool
 }
 
 // Server is a running test server.
@@ -47,6 +61,22 @@ func Start(t testing.TB, opts Options) *Server {
 	userOK := func(ctx gliderssh.Context) bool { return opts.User == "" || ctx.User() == opts.User }
 
 	srv := &gliderssh.Server{Handler: handle}
+	if opts.Exec != nil {
+		srv.Handler = scripted(opts.Exec)
+	}
+	if opts.SFTPRoot != "" {
+		root := opts.SFTPRoot
+		srv.SubsystemHandlers = map[string]gliderssh.SubsystemHandler{
+			"sftp": func(s gliderssh.Session) {
+				server, err := sftp.NewServer(s, sftp.WithServerWorkingDirectory(root))
+				if err != nil {
+					return
+				}
+				_ = server.Serve()
+				_ = server.Close()
+			},
+		}
+	}
 	for _, s := range opts.HostSigners {
 		srv.AddHostKey(s)
 	}
@@ -94,6 +124,19 @@ func handle(s gliderssh.Session) {
 		code = 255
 	}
 	_ = s.Exit(code)
+}
+
+func scripted(exec func(string) Reply) gliderssh.Handler {
+	return func(s gliderssh.Session) {
+		r := exec(s.RawCommand())
+		_, _ = io.WriteString(s, r.Stdout)
+		_, _ = io.WriteString(s.Stderr(), r.Stderr)
+		if r.Drop {
+			_ = s.Close()
+			return
+		}
+		_ = s.Exit(r.Code)
+	}
 }
 
 // NewEd25519Signer returns a fresh ed25519 signer.

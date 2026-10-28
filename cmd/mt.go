@@ -51,8 +51,9 @@ func mtTargets(cmd *cobra.Command, opts *globalOptions) ([]runner.Target, error)
 func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	var format, dest string
 	cmd := &cobra.Command{
-		Use:   "backup",
-		Short: "Export and download config backups",
+		Use:     "backup",
+		Aliases: []string{"b", "ba", "bck"},
+		Short:   "Export and download config backups",
 		Long: "Writes backups/<Day>.rsc / .backup on each device (a rolling 7-day set kept on the device),\n" +
 			"then downloads them over SFTP to --path as <group>/<name>/<Day>.<ext> for a local dir,\n" +
 			"or <group>/<name>/<YYYY-MM-DD>.<ext> for S3 (expire old copies with a lifecycle rule).",

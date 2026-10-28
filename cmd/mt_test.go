@@ -157,7 +157,7 @@ func TestMtBackupDeviceError(t *testing.T) {
 func TestMtBackupUsageErrors(t *testing.T) {
 	f, cfg := startRouter(t)
 	for _, args := range [][]string{
-		{"mt", "backup", "--path", "s3://bucket/prefix/"},
+		{"mt", "backup", "--path", "s3:///prefix/"},
 		{"mt", "backup", "--format", "zip"},
 		{"mt", "backup", "--sse", "rot13"},
 	} {

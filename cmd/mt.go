@@ -225,9 +225,10 @@ func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) 
 
 func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "reboot",
-		Short: "Reboot devices (asks for confirmation unless -y/--assume-yes)",
-		Args:  cobra.NoArgs,
+		Use:     "reboot",
+		Aliases: []string{"re"},
+		Short:   "Reboot devices (asks for confirmation unless -y/--assume-yes)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {

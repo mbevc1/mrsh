@@ -13,7 +13,7 @@ Metadata:
       - Label: { default: Network (must reach the managed hosts) }
         Parameters: [SubnetIds, SecurityGroupIds, AssignPublicIp]
       - Label: { default: Data and secrets mrsh may access }
-        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, CreateBackupBucket, BackupRetentionDays, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
+        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, CreateBackupBucket, BackupRetentionDays, VersionRetentionDays, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
       - Label: { default: Sizing and logs }
         Parameters: [TaskCpu, TaskMemory, LogRetentionDays]
       - Label: { default: Notifications }
@@ -72,12 +72,21 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["false", "true"]
-    Description: true creates BackupBucket (private, SSE-S3, TLS only, retained on stack deletion) with an expiry rule.
+    Description: >-
+      true creates BackupBucket (private, SSE-S3, TLS only, versioned, retained on stack deletion) with
+      expiry rules. Keep the config (ConfigKey) in it too, outside BackupPrefix, to get its edit history.
   BackupRetentionDays:
     Type: Number
     Default: 90
     MinValue: 1
     Description: Days to keep objects under BackupPrefix when CreateBackupBucket=true (keep the config outside that prefix).
+  VersionRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: >-
+      Days to keep overwritten or deleted versions (previous config edits, expired backups) when
+      CreateBackupBucket=true. Roll back a bad config edit by restoring a previous version.
   SsmParameterPrefix:
     Type: String
     Default: ""
@@ -145,12 +154,21 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
+      # Every config save keeps the previous copy, so a bad edit can be rolled back.
+      VersioningConfiguration:
+        Status: Enabled
       LifecycleConfiguration:
         Rules:
           - Id: expire-backups
             Status: Enabled
             Prefix: !Ref BackupPrefix
             ExpirationInDays: !Ref BackupRetentionDays
+          - Id: expire-old-versions # previous config edits and expired backups
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: !Ref VersionRetentionDays }
+          - Id: remove-expired-delete-markers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
           - Id: abort-incomplete-uploads
             Status: Enabled
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }

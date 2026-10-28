@@ -47,7 +47,6 @@ archives:
     files:
       - README.md
       - LICENSE*
-      - hosts.example.yaml
 
 checksum:
   name_template: checksums.txt

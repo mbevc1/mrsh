@@ -186,10 +186,9 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 
 func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 	var name string
-	var confirm bool
 	cmd := &cobra.Command{
 		Use:   "remove --name NAME",
-		Short: "Remove a host entry (asks for confirmation unless --confirm)",
+		Short: "Remove a host entry (asks for confirmation unless -y/--assume-yes)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openStore(opts)
@@ -202,7 +201,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 				if !ok {
 					return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
 				}
-				if !confirm && !asked {
+				if !opts.yes && !asked {
 					asked = true
 					if !askYesNo(cmd, fmt.Sprintf("Remove host %s (%s) from %s? [y/N]: ", h.Name, h.Host, store.Location())) {
 						return errors.New("aborted")
@@ -218,7 +217,6 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "host name to remove")
-	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd

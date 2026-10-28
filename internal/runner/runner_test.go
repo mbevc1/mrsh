@@ -222,16 +222,19 @@ func TestWriteText(t *testing.T) {
 		{Name: "web01", Host: "10.0.0.1", Group: "web", Stdout: "up 4 days\nline2\nline3\n", Duration: 142 * time.Millisecond},
 		{Name: "db01", Host: "10.0.0.10", ExitCode: 1, Stderr: "permission denied\n", Duration: 1500 * time.Millisecond},
 		{Name: "x", Host: "x", ExitCode: -1, Err: errors.New("dial x:22: refused")},
+		{Name: "rt2", Host: "10.0.0.2", ExitCode: -1, Stdout: "saved lab/rt2/Mon.rsc (45 B)", Err: errors.New("routeros: failure: not enough space")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"NAME    HOST        GROUP   EXIT   DURATION   OUTPUT",
+		"NAME    HOST        GROUP   EXIT     DURATION   OUTPUT",
 		"up 4 days (+2 lines)", "142ms", "1.5s",
 		"[stderr] permission denied", "[error] dial x:22: refused",
-		"db01    10.0.0.10   -       1",
+		"db01    10.0.0.10   -       1      ",
+		"x       x           -       failed ",
+		"failed   0ms        [error] routeros: failure: not enough space; saved lab/rt2/Mon.rsc (45 B)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
@@ -244,11 +247,12 @@ func TestWarnIfInsecure(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	WarnIfInsecure(ssh.PolicyStrict, 3)
+	WarnIfInsecure(ssh.PolicyStrict, false, 3)
+	WarnIfInsecure(ssh.PolicyInsecure, true, 3)
 	if buf.Len() != 0 {
-		t.Errorf("warned for strict: %s", buf.String())
+		t.Errorf("warned for strict or a chosen insecure: %s", buf.String())
 	}
-	WarnIfInsecure(ssh.PolicyInsecure, 3)
+	WarnIfInsecure(ssh.PolicyInsecure, false, 3)
 	if !strings.Contains(buf.String(), "host key checking disabled") {
 		t.Errorf("no warning: %q", buf.String())
 	}

@@ -96,7 +96,7 @@ func newVersionCmd(opts *globalOptions) *cobra.Command {
 			switch opts.output {
 			case "json":
 				return json.NewEncoder(out).Encode(info)
-			case "text":
+			case "text", "full":
 				_, err := io.WriteString(out, versionText(info))
 				return err
 			default:

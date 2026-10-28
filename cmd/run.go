@@ -83,12 +83,12 @@ func selectTargets(lc *loadedConfig, opts *globalOptions) ([]runner.Target, erro
 }
 
 // prepareConnect resolves secrets for the targets only, then warns once if
-// host keys go unchecked.
+// host keys go unchecked by default rather than by choice.
 func prepareConnect(ctx context.Context, opts *globalOptions, targets []runner.Target) error {
 	if err := runner.Resolve(ctx, newResolver(), targets); err != nil {
 		return err
 	}
-	runner.WarnIfInsecure(opts.hostKeyPolicy, len(targets))
+	runner.WarnIfInsecure(opts.hostKeyPolicy, opts.hostKeyPolicySet, len(targets))
 	return nil
 }
 

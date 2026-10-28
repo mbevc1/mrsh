@@ -99,7 +99,7 @@ func Parse(raw []byte) (*Config, error) {
 	return &c, nil
 }
 
-var validOutputs = map[string]bool{"": true, "text": true, "json": true, "csv": true}
+var validOutputs = map[string]bool{"": true, "text": true, "full": true, "json": true, "csv": true}
 
 var validHostKeyPolicies = map[string]bool{"": true, HostKeyStrict: true, HostKeyAcceptNew: true, HostKeyInsecure: true}
 
@@ -122,7 +122,7 @@ func (c *Config) Validate() error {
 		add("defaults: parallel must not be negative")
 	}
 	if !validOutputs[d.Output] {
-		add("defaults: output %q must be text, json or csv", d.Output)
+		add("defaults: output %q must be text, full, json or csv", d.Output)
 	}
 	if !validHostKeyPolicies[d.HostKeyPolicy] {
 		add("defaults: host_key_policy %q must be strict, accept-new or insecure", d.HostKeyPolicy)

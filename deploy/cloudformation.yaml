@@ -23,7 +23,7 @@ Parameters:
     Description: mrsh image, preferably pinned by digest (e.g. ghcr.io/mbevc1/mrsh@sha256:...).
   MrshArgs:
     Type: CommaDelimitedList
-    Description: mrsh arguments, comma-separated. Use s3:// paths for the config and backups, and --confirm for reboot/upgrade.
+    Description: mrsh arguments, comma-separated. Use s3:// paths for the config and backups, and -y (--assume-yes) for reboot/upgrade.
     Default: "-f,s3://CHANGE-ME/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://CHANGE-ME/mrsh/backups/"
   Architecture:
     Type: String

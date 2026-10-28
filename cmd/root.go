@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -30,15 +31,17 @@ type globalOptions struct {
 	output       string
 	dryRun       bool
 	debug        bool
+	yes          bool
 
-	hostKeyPolicy string
-	knownHosts    string
+	hostKeyPolicy    string
+	hostKeyPolicySet bool // chosen by flag or config, not the built-in default
+	knownHosts       string
 
 	sseMode string
 	kmsKey  string
 }
 
-var validOutputs = []string{"text", "json", "csv"}
+var validOutputs = []string{"text", "full", "json", "csv"}
 
 // Exit codes: 0 all hosts ok, 1 any host failed, 2 usage or config error.
 const (
@@ -110,6 +113,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.IntVarP(&opts.timeout, "timeout", "t", 30, "SSH timeout in seconds")
 	pf.StringVarP(&opts.output, "output", "o", "text", "output format: "+strings.Join(validOutputs, "|"))
 	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run without executing")
+	pf.BoolVarP(&opts.yes, "assume-yes", "y", false, "answer yes to confirmation prompts (alias --yes)")
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
 	pf.StringVar(&opts.hostKeyPolicy, "host-key-policy", config.HostKeyInsecure, "host key checking: strict|accept-new|insecure")
 	pf.StringVar(&opts.knownHosts, "known-hosts", "~/.ssh/known_hosts", "known_hosts file for strict/accept-new")
@@ -138,7 +142,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	return root, opts
 }
 
-var flagAliases = map[string]string{"hosts": "host"}
+var flagAliases = map[string]string{"hosts": "host", "yes": "assume-yes"}
 
 func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	if canonical, ok := flagAliases[name]; ok {
@@ -149,12 +153,52 @@ func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 
 // setupLogging logs to w (stderr) so stdout stays clean for --output json|csv.
 func setupLogging(w io.Writer, debug bool) {
-	level := slog.LevelWarn
 	if debug {
-		level = slog.LevelDebug
+		slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		return
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
+	slog.SetDefault(slog.New(&plainHandler{w: w, mu: &sync.Mutex{}}))
 }
+
+// plainHandler prints warnings and errors as "mrsh: warning: msg k=v", a
+// CLI-style line without the timestamp and level keys of debug logs.
+type plainHandler struct {
+	w     io.Writer
+	mu    *sync.Mutex
+	attrs []slog.Attr
+}
+
+func (h *plainHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelWarn }
+
+func (h *plainHandler) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString("mrsh: ")
+	if r.Level >= slog.LevelError {
+		b.WriteString("error: ")
+	} else {
+		b.WriteString("warning: ")
+	}
+	b.WriteString(r.Message)
+	write := func(a slog.Attr) bool {
+		fmt.Fprintf(&b, " %s=%v", a.Key, a.Value)
+		return true
+	}
+	for _, a := range h.attrs {
+		write(a)
+	}
+	r.Attrs(write)
+	b.WriteByte('\n')
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, err := io.WriteString(h.w, b.String())
+	return err
+}
+
+func (h *plainHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &plainHandler{w: h.w, mu: h.mu, attrs: append(append([]slog.Attr{}, h.attrs...), attrs...)}
+}
+
+func (h *plainHandler) WithGroup(string) slog.Handler { return h }
 
 // envDebug parses MRSH_DEBUG the same way viper does (strconv.ParseBool).
 func envDebug() bool {

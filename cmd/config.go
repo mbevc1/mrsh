@@ -60,6 +60,7 @@ func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) 
 	// The resolved flag-or-defaults value becomes the default every host
 	// inherits; a per-host known_hosts still wins.
 	cfg.Defaults.KnownHosts = opts.knownHosts
+	opts.hostKeyPolicySet = cmd.Flags().Changed("host-key-policy") || cfg.Defaults.HostKeyPolicy != ""
 	slog.Debug("config loaded", "path", store.Location(), "source", sourceKind(opts.config),
 		"hosts", len(cfg.Hosts), "parallel", opts.parallel, "timeout", opts.timeout, "output", opts.output)
 	return &loadedConfig{cfg: cfg, store: store, version: version}, nil

@@ -132,9 +132,6 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	root.Flags().BoolP("version", "v", false, "print version and build info (same as 'mrsh version')")
 
 	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
-	// List subcommands with their aliases, e.g. "list (l, ls)".
-	root.SetUsageTemplate(strings.ReplaceAll(root.UsageTemplate(),
-		"{{rpad .Name .NamePadding }}", "{{rpad (aliasedName .) (aliasedNamePadding .)}}"))
 	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCredentialsCmd(opts), newCompletionCmd())
 	for flag, fn := range map[string]cobra.CompletionFunc{
 		"host":            completeHostNames(opts),
@@ -146,27 +143,6 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 		_ = root.RegisterFlagCompletionFunc(flag, fn)
 	}
 	return root, opts
-}
-
-func init() {
-	cobra.AddTemplateFunc("aliasedName", aliasedName)
-	cobra.AddTemplateFunc("aliasedNamePadding", func(c *cobra.Command) int {
-		width := 11 // cobra's minimum
-		for _, sib := range c.Parent().Commands() {
-			if sib.IsAvailableCommand() || sib.Name() == "help" {
-				width = max(width, len(aliasedName(sib)))
-			}
-		}
-		return width
-	})
-}
-
-// aliasedName is a command's name for help listings: "list (l, ls)".
-func aliasedName(c *cobra.Command) string {
-	if len(c.Aliases) == 0 {
-		return c.Name()
-	}
-	return c.Name() + " (" + strings.Join(c.Aliases, ", ") + ")"
 }
 
 var flagAliases = map[string]string{"hosts": "host", "yes": "assume-yes"}

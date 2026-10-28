@@ -177,20 +177,6 @@ func TestSubcommandAliases(t *testing.T) {
 	}
 }
 
-func TestHelpListsAliases(t *testing.T) {
-	for args, want := range map[string][]string{
-		"--help":       {"  hosts (host, ho, h)       Manage", "  credentials (creds, cred) Manage", "  ui                        Edit"},
-		"hosts --help": {"  list (l, ls)   List", "  update (u, up) Update", "  example        Print"},
-	} {
-		out, err := execRoot(t, strings.Fields(args)...)
-		for _, w := range want {
-			if err != nil || !strings.Contains(out, w) {
-				t.Errorf("mrsh %s: missing %q (err=%v)\n%s", args, w, err, out)
-			}
-		}
-	}
-}
-
 func TestHostsExample(t *testing.T) {
 	out, err := execRoot(t, "hosts", "example")
 	if err != nil {

@@ -51,8 +51,9 @@ func mtTargets(cmd *cobra.Command, opts *globalOptions) ([]runner.Target, error)
 func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	var format, dest string
 	cmd := &cobra.Command{
-		Use:   "backup",
-		Short: "Export and download config backups",
+		Use:     "backup",
+		Aliases: []string{"b", "ba", "bck"},
+		Short:   "Export and download config backups",
 		Long: "Writes backups/<Day>.rsc / .backup on each device (a rolling 7-day set kept on the device),\n" +
 			"then downloads them over SFTP to --path as <group>/<name>/<Day>.<ext> for a local dir,\n" +
 			"or <group>/<name>/<YYYY-MM-DD>.<ext> for S3 (expire old copies with a lifecycle rule).",
@@ -221,9 +222,10 @@ func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) 
 
 func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "reboot",
-		Short: "Reboot devices (asks for confirmation unless -y/--assume-yes)",
-		Args:  cobra.NoArgs,
+		Use:     "reboot",
+		Aliases: []string{"re"},
+		Short:   "Reboot devices (asks for confirmation unless -y/--assume-yes)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {
@@ -274,8 +276,9 @@ func expectDisconnect(stdout, stderr string, code int, err error) error {
 
 func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "upgrade",
-		Short: "Check and install RouterOS updates, then routerboard firmware",
+		Use:     "upgrade",
+		Aliases: []string{"up"},
+		Short:   "Check and install RouterOS updates, then routerboard firmware",
 		Long: "Each run takes one step per device, since each step ends in a reboot:\n" +
 			"  1. a newer RouterOS on the channel: install it (the device reboots)\n" +
 			"  2. RouterOS current but routerboard firmware behind: upgrade firmware and reboot\n" +
@@ -434,9 +437,10 @@ func pollUpdate(ctx context.Context, conn *ssh.Conn) (mt.UpdateStatus, error) {
 
 func newMtVersionCmd(opts *globalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Show routerboard firmware and installed package versions",
-		Args:  cobra.NoArgs,
+		Use:     "version",
+		Aliases: []string{"v", "ver"},
+		Short:   "Show routerboard firmware and installed package versions",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {

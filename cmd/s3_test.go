@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -88,5 +89,29 @@ func TestS3MtBackupMissingBucketTouchesNoDevice(t *testing.T) {
 	}
 	if len(f.sent()) != 0 {
 		t.Errorf("device commands ran: %v", f.sent())
+	}
+}
+
+func TestHostsCopyLocalAndS3(t *testing.T) {
+	fake := s3test.Start(t, "cfg")
+	src := writeConfig(t, "# kept\nhosts:\n  - {name: rt1, host: 10.0.0.1}\n")
+	uri := "s3://cfg/mrsh/hosts.yaml"
+
+	// Up to S3, encrypted as asked.
+	if _, err := execRoot(t, "-f", src, "--sse", "aws:kms", "--kms-key", "arn:aws:kms:eu-west-1:123456789012:key/k", "hosts", "copy", "--to", uri); err != nil {
+		t.Fatal(err)
+	}
+	o := fake.Object("cfg", "mrsh/hosts.yaml")
+	if o == nil || string(o.Data) != readFile(t, src) || o.SSE != "aws:kms" || o.KMSKey == "" {
+		t.Fatalf("object = %+v", o)
+	}
+	// Never over an existing object without --force.
+	if _, err := execRoot(t, "-f", src, "hosts", "copy", "--to", uri); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("no-clobber: %v", err)
+	}
+	// And back down again.
+	local := filepath.Join(t.TempDir(), "hosts.yaml")
+	if _, err := execRoot(t, "-f", uri, "hosts", "copy", "--to", local); err != nil || readFile(t, local) != readFile(t, src) {
+		t.Errorf("download: %v", err)
 	}
 }

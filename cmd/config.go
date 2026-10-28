@@ -29,6 +29,7 @@ func openStore(opts *globalOptions) (config.ConfigStore, error) {
 
 type loadedConfig struct {
 	cfg     *config.Config
+	raw     []byte // the file as loaded, comments and all
 	store   config.ConfigStore
 	version string
 }
@@ -65,7 +66,7 @@ func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) 
 	warnLiteralPasswords(cfg, store.Location(), version)
 	slog.Debug("config loaded", "path", store.Location(), "source", sourceKind(opts.config),
 		"hosts", len(cfg.Hosts), "parallel", opts.parallel, "timeout", opts.timeout, "output", opts.output)
-	return &loadedConfig{cfg: cfg, store: store, version: version}, nil
+	return &loadedConfig{cfg: cfg, raw: raw, store: store, version: version}, nil
 }
 
 var defaultBindings = map[string]string{

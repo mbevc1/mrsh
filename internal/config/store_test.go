@@ -141,3 +141,19 @@ func TestLocalStoreConcurrentSaves(t *testing.T) {
 		t.Errorf("wins=%d conflicts=%d, want 1 and %d", wins.Load(), conflicts.Load(), writers-1)
 	}
 }
+
+func TestLocalStoreCreatesPrivateFolders(t *testing.T) {
+	base := t.TempDir()
+	s := &LocalStore{Path: filepath.Join(base, "a", "b", "hosts.yaml")}
+	if err := s.Save(context.Background(), []byte("hosts: []\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(base, "a"), filepath.Join(base, "a", "b")} {
+		if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s: %v %v", dir, fi.Mode().Perm(), err)
+		}
+	}
+	if fi, err := os.Stat(s.Path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("file: %v %v", fi.Mode().Perm(), err)
+	}
+}

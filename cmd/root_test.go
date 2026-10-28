@@ -63,6 +63,7 @@ func TestInvalidOutputRejected(t *testing.T) {
 }
 
 func TestGlobalFlagDefaults(t *testing.T) {
+	t.Setenv("MRSH_CONFIG", "") // the developer's own setting would change -f's default
 	pf := newRootCmd().PersistentFlags()
 	want := map[string]string{
 		"config": "hosts.yaml", "group": "", "user": "", "identity-file": "",

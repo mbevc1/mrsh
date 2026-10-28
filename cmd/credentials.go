@@ -41,9 +41,10 @@ type credentialRow struct {
 func newCredentialsListCmd(opts *globalOptions) *cobra.Command {
 	var showSecrets bool
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List credential sets and who uses them (passwords masked unless --show-secrets)",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"l", "ls"},
+		Short:   "List credential sets and who uses them (passwords masked unless --show-secrets)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			lc, err := loadConfig(cmd, opts)
 			if err != nil {
@@ -95,8 +96,9 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 	var name string
 	var f secretFlags
 	cmd := &cobra.Command{
-		Use:   "set --name NAME [flags]",
-		Short: "Create a credential set, or change the given fields of an existing one",
+		Use:     "set --name NAME [flags]",
+		Aliases: []string{"s"},
+		Short:   "Create a credential set, or change the given fields of an existing one",
 		Long: "Create the named credential set, or update it: only the flags given change, and a new\n" +
 			"user or pass variant replaces the old one. The user and identity file come from the\n" +
 			"global -u/--user and -i/--identity-file (-i \"\" clears it).",
@@ -145,9 +147,10 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
-		Use:   "remove --name NAME",
-		Short: "Remove an unused credential set (asks for confirmation unless -y/--assume-yes)",
-		Args:  cobra.NoArgs,
+		Use:     "remove --name NAME",
+		Aliases: []string{"r", "rm"},
+		Short:   "Remove an unused credential set (asks for confirmation unless -y/--assume-yes)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openStore(opts)
 			if err != nil {
@@ -238,8 +241,9 @@ func newCredentialsAssignCmd(opts *globalOptions) *cobra.Command {
 	var name string
 	var clear bool
 	cmd := &cobra.Command{
-		Use:   "assign (--name NAME | --clear) {-g GROUP | -H HOST}...",
-		Short: "Point many hosts at a credential set (or --clear it) by group or name",
+		Use:     "assign (--name NAME | --clear) {-g GROUP | -H HOST}...",
+		Aliases: []string{"ass"},
+		Short:   "Point many hosts at a credential set (or --clear it) by group or name",
 		Long: "Set credential: NAME on every config host selected by the global -g/--group and\n" +
 			"-H/--host flags (config names or addresses; literal addresses are refused). Each\n" +
 			"host's own user, pass and identity file are left as they are, and still win.",

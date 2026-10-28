@@ -52,7 +52,7 @@ hosts: []
 func newHostsCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "hosts",
-		Aliases: []string{"ho", "h"},
+		Aliases: []string{"host", "ho", "h"},
 		Short:   "Manage the hosts config",
 	}
 	cmd.AddCommand(newHostsInitCmd(opts), newHostsExampleCmd(), newHostsListCmd(opts),
@@ -63,9 +63,10 @@ func newHostsCmd(opts *globalOptions) *cobra.Command {
 func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Create a starter hosts.yaml",
-		Args:  cobra.NoArgs,
+		Use:     "init",
+		Aliases: []string{"i"},
+		Short:   "Create a starter hosts.yaml",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			store, err := openStore(opts)
 			if err != nil {
@@ -96,10 +97,11 @@ func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 
 func newHostsExampleCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "example",
-		Short: "Print an annotated example config",
-		Long:  "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
-		Args:  cobra.NoArgs,
+		Use:     "example",
+		Aliases: []string{"ex"},
+		Short:   "Print an annotated example config",
+		Long:    "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := cmd.OutOrStdout().Write(config.Example)
 			return err
@@ -122,9 +124,10 @@ type hostRow struct {
 func newHostsListCmd(opts *globalOptions) *cobra.Command {
 	var showSecrets bool
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List hosts (passwords masked unless --show-secrets)",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"l", "ls"},
+		Short:   "List hosts (passwords masked unless --show-secrets)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			lc, err := loadConfig(cmd, opts)
 			if err != nil {

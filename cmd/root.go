@@ -33,6 +33,7 @@ type globalOptions struct {
 	debug        bool
 	quiet        bool
 	yes          bool
+	wait         bool // mt upgrade --wait
 
 	hostKeyPolicy    string
 	hostKeyPolicySet bool // chosen by flag or config, not the built-in default

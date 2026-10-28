@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mbevc1/mrsh/internal/config"
@@ -463,4 +464,25 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// ndjson writes one JSON value per line and flushes each, so the page sees
+// every host as soon as it changes. The status line goes out with the
+// first value, which leaves earlier errors free to set their own code.
+type ndjson struct {
+	w       http.ResponseWriter
+	mu      sync.Mutex
+	started bool
+}
+
+func (n *ndjson) send(v any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.started {
+		n.w.Header().Set("Content-Type", "application/x-ndjson")
+		n.w.WriteHeader(http.StatusOK)
+		n.started = true
+	}
+	_ = json.NewEncoder(n.w).Encode(v)
+	_ = http.NewResponseController(n.w).Flush()
 }

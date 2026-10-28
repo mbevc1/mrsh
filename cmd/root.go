@@ -119,7 +119,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts))
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts))
 	return root, opts
 }
 

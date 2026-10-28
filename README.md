@@ -64,6 +64,42 @@ Secrets are resolved only for the hosts a command targets, using the standard AW
 - `-o text|json|csv`. Logs go to stderr, so `mrsh -o json run -c uptime | jq` works with `--debug` on.
 - Exit codes: `0` all hosts ok, `1` any host failed or exited non-zero, `2` usage or config error, `130` interrupted.
 
+## Container image
+
+Tagged releases and `main` publish a signed multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/mbevc1/mrsh`, with an SBOM and provenance. It is distroless: no shell, UID 65532, and it works with a read-only root filesystem.
+
+```bash
+docker run --rm --read-only --cap-drop ALL \
+  -v "$PWD/hosts.yaml:/home/nonroot/hosts.yaml:ro" \
+  ghcr.io/mbevc1/mrsh -g web run -c uptime
+
+# config and backups in S3; mrsh writes only to /tmp (known_hosts with accept-new)
+docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp -e AWS_REGION=eu-west-1 \
+  ghcr.io/mbevc1/mrsh -f s3://my-bucket/mrsh/hosts.yaml -g routers mt backup --path s3://my-bucket/mrsh/backups/
+```
+
+`make docker` builds it locally. `mrsh ui` listens on loopback only, so it is not reachable from outside a container.
+
+## Scheduled runs on AWS
+
+`deploy/cloudformation.yaml` runs mrsh as an ECS Fargate task on an EventBridge Scheduler schedule. The task has no time limit and pulls the image from any registry, GHCR included. Its subnets must reach the managed hosts and the AWS APIs (NAT or VPC endpoints). The IAM policy covers only the config object and, when set, the backup prefix, SSM/Secrets Manager prefixes and one KMS key.
+
+```bash
+aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM \
+  --template-file deploy/cloudformation.yaml --parameter-overrides \
+  ImageUri=ghcr.io/mbevc1/mrsh:0.1.0 \
+  MrshArgs="-f,s3://my-bucket/mrsh/hosts.yaml,-g,routers,mt,backup,--path,s3://my-bucket/mrsh/backups/" \
+  ConfigBucket=my-bucket ConfigKey=mrsh/hosts.yaml BackupBucket=my-bucket \
+  SsmParameterPrefix=mrsh/ SubnetIds=subnet-aaa,subnet-bbb SecurityGroupIds=sg-ccc
+```
+
+Things to know:
+
+- **Paths:** use `s3://` for the config and backups; the container filesystem is read-only apart from `/tmp`.
+- **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `--confirm`.
+- **No replays:** retries are off, so a failed reboot or upgrade is not repeated.
+- **Host keys:** `/tmp` does not survive between runs, so `accept-new` cannot remember hosts. For verified host keys, use `strict` with a `known_hosts` file baked into a derived image.
+
 ## Development
 
 ```bash
@@ -71,6 +107,8 @@ make build      # ./mrsh with version info from git
 make test       # race detector + coverage
 make lint       # golangci-lint
 make snapshot   # goreleaser cross-compile into ./dist (needs goreleaser)
+make clean      # remove binaries, dist/, coverage and test output
+make help       # list all targets
 ```
 
 Tests need no network or cloud access: SSH, SFTP and S3 run against in-process fakes. Releases are cut by pushing a `v*` tag.

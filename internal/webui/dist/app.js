@@ -256,8 +256,9 @@ function statusBadge(name, results = state.tests) {
   if (!r) return span;
   if (r.running) {
     span.className = "badge running"; span.textContent = "testing…";
-  } else if (r.ok && r.action && r.action !== "none") {
-    // An upgrade step is available (dry run) or under way: not the same as "up to date".
+  } else if (r.ok && (r.pending || (r.action && r.action !== "none"))) {
+    // Firmware pending (test), or an upgrade step available (dry run) or under
+    // way: not the same as "up to date".
     span.className = "badge update";
     span.textContent = `↑ ${r.summary}`;
     span.title = r.detail;
@@ -341,7 +342,7 @@ async function runTests(names, btn) {
   await busy(btn, "Testing…", async () => {
     try {
       const { results } = await api("POST", "/api/test", { hosts: names });
-      for (const r of results) state.tests[r.name] = { ok: r.ok, summary: r.summary || r.detail, detail: r.detail, ms: r.duration_ms };
+      for (const r of results) state.tests[r.name] = { ok: r.ok, pending: r.pending, summary: r.summary || r.detail, detail: r.detail, ms: r.duration_ms };
       const ok = results.filter((r) => r.ok).length;
       toast(results.length === 1 ? `${results[0].name}: ${results[0].summary || results[0].detail}` : `${ok} of ${results.length} hosts OK`,
         ok < results.length);

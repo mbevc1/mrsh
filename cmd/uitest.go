@@ -111,7 +111,7 @@ func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
 			}
 			out.OK, out.Detail = true, "connected (not RouterOS)"
 			if v, ok := r.Result.Data.(mt.Version); ok {
-				out.Detail = describeVersion(v)
+				out.Detail, out.Pending = describeVersion(v), v.FirmwarePending()
 			}
 			out.Summary = out.Detail
 		}

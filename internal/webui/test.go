@@ -15,6 +15,7 @@ type TestResult struct {
 	OK         bool   `json:"ok"`
 	Summary    string `json:"summary"` // short form for the badge, e.g. "connect: no route to host"
 	Detail     string `json:"detail"`  // full message, shown on hover
+	Pending    bool   `json:"pending"` // a firmware upgrade is waiting for a reboot
 	DurationMS int64  `json:"duration_ms"`
 }
 

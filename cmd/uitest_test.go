@@ -106,6 +106,9 @@ func TestUIHostTest(t *testing.T) {
 	if s := got["rt1"].Summary; s != got["rt1"].Detail {
 		t.Errorf("ok summary %q != detail %q", s, got["rt1"].Detail)
 	}
+	if !got["rt1"].Pending || got["box"].Pending {
+		t.Errorf("pending: rt1 %v, box %v; want true, false", got["rt1"].Pending, got["box"].Pending)
+	}
 	for name, w := range want {
 		r := got[name]
 		if r.OK != w.ok || !bytes.Contains([]byte(r.Detail), []byte(w.detail)) {

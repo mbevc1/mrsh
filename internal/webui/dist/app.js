@@ -256,6 +256,11 @@ function statusBadge(name, results = state.tests) {
   if (!r) return span;
   if (r.running) {
     span.className = "badge running"; span.textContent = "testing…";
+  } else if (r.ok && r.action && r.action !== "none") {
+    // An upgrade step is available (dry run) or under way: not the same as "up to date".
+    span.className = "badge update";
+    span.textContent = `↑ ${r.summary}`;
+    span.title = r.detail;
   } else {
     span.className = r.ok ? "badge ok" : "badge fail";
     span.textContent = `${r.ok ? "✓" : "✗"} ${r.summary}`;

@@ -2,7 +2,7 @@
   --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
   --accent: #2f5bd3; --accent-text: #ffffff; --danger: #b3261e; --warn-bg: #fff4d6; --warn-text: #6a4b00;
   --ok-bg: #e3f4e8; --ok-text: #1d5b30; --hover: #f1f0eb;
-  --head: #e4eafb; --head-text: #1f3f99;
+  --head: #e4eafb; --head-text: #1f3f99; --update-bg: #dfe7ff; --update-text: #1f3f99;
   --radius: 8px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light dark;
 }
@@ -11,7 +11,7 @@
     --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a94; --line: #34332f;
     --accent: #7c9bff; --accent-text: #0d0d0c; --danger: #ff8a80; --warn-bg: #3a2f10; --warn-text: #f3d98a;
     --ok-bg: #16311f; --ok-text: #a6e3b8; --hover: #2a2927;
-    --head: #1f2a47; --head-text: #c9d6ff;
+    --head: #1f2a47; --head-text: #c9d6ff; --update-bg: #24335c; --update-text: #c9d6ff;
   }
 }
 * { box-sizing: border-box; }
@@ -82,6 +82,7 @@ th.status, td.status { width: 304px; min-width: 304px; max-width: 304px; overflo
   padding: 1px 8px; border-radius: 999px; font-size: 12px; }
 .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
 .badge.fail { background: var(--warn-bg); color: var(--danger); }
+.badge.update { background: var(--update-bg); color: var(--update-text); }
 .badge.running { color: var(--muted); }
 .muted { color: var(--muted); }
 .empty, .hint { color: var(--muted); }

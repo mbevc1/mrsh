@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -173,5 +174,74 @@ func TestSecretRefDisplay(t *testing.T) {
 		if got := tt.ref.Display(true); got != tt.unmasked {
 			t.Errorf("Display(true) = %q, want %q", got, tt.unmasked)
 		}
+	}
+}
+
+func TestEffectiveCredentialPrecedence(t *testing.T) {
+	c := &Config{
+		Credentials: map[string]CredentialSet{
+			"lab":  {Credentials: Credentials{User: "lab-user", PassEnv: "LAB_PASS"}, IdentityFile: "/k/lab"},
+			"base": {Credentials: Credentials{UserEnv: "BASE_USER", PassARN: "arn:base"}, IdentityFile: "/k/base"},
+		},
+		Defaults: Defaults{Credential: "base", Credentials: Credentials{User: "def-user"}},
+	}
+	tests := []struct {
+		name       string
+		h          Host
+		user, pass string
+		key        string
+	}{
+		// Nothing on the host: defaults' own user, then the defaults' set for the rest.
+		{"defaults then defaults' set", Host{}, "def-user", "arn:base", "/k/base"},
+		// The host's set beats defaults for every field it sets.
+		{"host set", Host{Credential: "lab"}, "lab-user", "LAB_PASS", "/k/lab"},
+		// The host's own fields beat its set, field by field.
+		{"host overrides user only", Host{Credential: "lab", Credentials: Credentials{UserEnv: "MINE"}}, "MINE", "LAB_PASS", "/k/lab"},
+		{"host overrides pass only", Host{Credential: "lab", Credentials: Credentials{Pass: "own"}}, "lab-user", "own", "/k/lab"},
+		{"host overrides key only", Host{Credential: "lab", IdentityFile: "/k/own"}, "lab-user", "LAB_PASS", "/k/own"},
+	}
+	for _, tt := range tests {
+		e := c.Effective(tt.h)
+		user := e.User + e.UserEnv + e.UserARN
+		pass := e.Pass + e.PassEnv + e.PassARN
+		if user != tt.user || pass != tt.pass || e.IdentityFile != tt.key {
+			t.Errorf("%s: user=%q pass=%q key=%q, want %q %q %q", tt.name, user, pass, e.IdentityFile, tt.user, tt.pass, tt.key)
+		}
+		if n := e.UserRef().variants() + e.PassRef().variants(); n != 2 {
+			t.Errorf("%s: a field-group mixed variants from two places: %+v", tt.name, e.Credentials)
+		}
+	}
+}
+
+func TestValidateCredentialSets(t *testing.T) {
+	const arn = "arn:aws:ssm:eu-west-1:123456789012:parameter/p"
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"ok", "credentials:\n  lab: {user: admin, pass_arn: " + arn + "}\nhosts:\n  - {name: a, host: h, credential: lab}\n", ""},
+		{"unknown on host", "hosts:\n  - {name: a, host: h, credential: nope}\n", `host a: credential "nope" is not defined`},
+		{"unknown on defaults", "defaults: {credential: nope}\nhosts: []\n", `defaults: credential "nope" is not defined`},
+		{"empty set", "credentials:\n  lab: {}\nhosts: []\n", "credential lab: set at least one of user, pass or identity_file"},
+		{"two pass variants", "credentials:\n  lab: {pass: x, pass_env: Y}\nhosts: []\n", "credential lab: pass: set only one of"},
+		{"bad arn", "credentials:\n  lab: {pass_arn: nope}\nhosts: []\n", "credential lab: pass_arn:"},
+		{"bad name", "credentials:\n  \"my lab\": {user: a}\nhosts: []\n", `credential "my lab": name must not contain whitespace`},
+		{"unknown key", "credentials:\n  lab: {usr: a}\nhosts: []\n", "field usr not found"},
+	}
+	for _, tt := range tests {
+		c, err := Parse([]byte(tt.yaml))
+		if err == nil {
+			err = c.Validate()
+		}
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s: unexpected %v", tt.name, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
+		}
+	}
+
+	c, _ := Parse([]byte("defaults: {credential: lab}\ncredentials:\n  lab: {user: a}\nhosts:\n  - {name: a, host: h, credential: lab}\n  - {name: b, host: h}\n"))
+	if got := c.CredentialUsers("lab"); !reflect.DeepEqual(got, []string{"defaults", "a"}) {
+		t.Errorf("CredentialUsers = %v", got)
 	}
 }

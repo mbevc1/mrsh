@@ -31,6 +31,7 @@ type globalOptions struct {
 	output       string
 	dryRun       bool
 	debug        bool
+	quiet        bool
 	yes          bool
 
 	hostKeyPolicy    string
@@ -58,6 +59,9 @@ type exitCodeError struct {
 
 func (e *exitCodeError) Error() string { return e.msg }
 
+// errInterrupted ends a command stopped by Ctrl-C or SIGTERM.
+var errInterrupted = &exitCodeError{code: exitInterrupted, msg: "interrupted"}
+
 // Execute runs the root command and exits non-zero on error. SIGINT and
 // SIGTERM cancel the context, which kills in-flight remote commands.
 func Execute() {
@@ -74,6 +78,10 @@ func exitCode(err error) int {
 		return 0
 	case errors.As(err, &ec):
 		return ec.code
+	case errors.Is(err, context.Canceled):
+		// Only the signal context is ever cancelled, so this is Ctrl-C or
+		// SIGTERM surfacing through another error, e.g. an S3 config load.
+		return exitInterrupted
 	}
 	return exitUsage
 }
@@ -93,7 +101,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			setupLogging(cmd.ErrOrStderr(), opts.debug || envDebug())
+			setupLogging(cmd.ErrOrStderr(), opts.debug || envDebug(), opts.quiet)
 			return validateOutput(opts.output)
 		},
 	}
@@ -115,6 +123,8 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run without executing")
 	pf.BoolVarP(&opts.yes, "assume-yes", "y", false, "answer yes to confirmation prompts (alias --yes)")
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
+	pf.BoolVarP(&opts.quiet, "quiet", "q", false, "suppress warnings (errors still print to stderr)")
+	root.MarkFlagsMutuallyExclusive("debug", "quiet")
 	pf.StringVar(&opts.hostKeyPolicy, "host-key-policy", config.HostKeyInsecure, "host key checking: strict|accept-new|insecure")
 	pf.StringVar(&opts.knownHosts, "known-hosts", "~/.ssh/known_hosts", "known_hosts file for strict/accept-new")
 	pf.StringVar(&opts.sseMode, "sse", "", "S3 server-side encryption for writes (config saves, backups): AES256|aws:kms")
@@ -129,7 +139,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	root.Flags().BoolP("version", "v", false, "print version and build info (same as 'mrsh version')")
 
 	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd())
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCredentialsCmd(opts), newCompletionCmd())
 	for flag, fn := range map[string]cobra.CompletionFunc{
 		"host":            completeHostNames(opts),
 		"group":           completeGroups(opts),
@@ -151,13 +161,19 @@ func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	return pflag.NormalizedName(name)
 }
 
-// setupLogging logs to w (stderr) so stdout stays clean for --output json|csv.
-func setupLogging(w io.Writer, debug bool) {
-	if debug {
+// setupLogging logs to w (stderr) so stdout carries only command output.
+// --quiet drops warnings (errors still print) and wins over a debug setting
+// from MRSH_DEBUG or the config; --quiet with --debug is a usage error.
+func setupLogging(w io.Writer, debug, quiet bool) {
+	if debug && !quiet {
 		slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		return
 	}
-	slog.SetDefault(slog.New(&plainHandler{w: w, mu: &sync.Mutex{}}))
+	min := slog.LevelWarn
+	if quiet {
+		min = slog.LevelError
+	}
+	slog.SetDefault(slog.New(&plainHandler{w: w, mu: &sync.Mutex{}, min: min}))
 }
 
 // plainHandler prints warnings and errors as "mrsh: warning: msg k=v", a
@@ -165,10 +181,11 @@ func setupLogging(w io.Writer, debug bool) {
 type plainHandler struct {
 	w     io.Writer
 	mu    *sync.Mutex
+	min   slog.Level
 	attrs []slog.Attr
 }
 
-func (h *plainHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelWarn }
+func (h *plainHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.min }
 
 func (h *plainHandler) Handle(_ context.Context, r slog.Record) error {
 	var b strings.Builder
@@ -195,7 +212,7 @@ func (h *plainHandler) Handle(_ context.Context, r slog.Record) error {
 }
 
 func (h *plainHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &plainHandler{w: h.w, mu: h.mu, attrs: append(append([]slog.Attr{}, h.attrs...), attrs...)}
+	return &plainHandler{w: h.w, mu: h.mu, min: h.min, attrs: append(append([]slog.Attr{}, h.attrs...), attrs...)}
 }
 
 func (h *plainHandler) WithGroup(string) slog.Handler { return h }

@@ -112,3 +112,28 @@ func fixedValues(values ...string) cobra.CompletionFunc {
 		return values, cobra.ShellCompDirectiveNoFileComp
 	}
 }
+
+func completeCredentials(opts *globalOptions) cobra.CompletionFunc {
+	return func(cmd *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		cfg := completionConfig(cmd, opts)
+		if cfg == nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		var out []string
+		for _, name := range sortedNames(cfg.Credentials) {
+			if strings.HasPrefix(name, toComplete) {
+				out = append(out, name)
+			}
+		}
+		return out, cobra.ShellCompDirectiveNoFileComp
+	}
+}
+
+func sortedNames[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

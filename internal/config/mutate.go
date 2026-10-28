@@ -11,10 +11,12 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// ErrHostExists and ErrHostNotFound report name clashes in mutations.
+// ErrHostExists and ErrHostNotFound report name clashes in mutations;
+// ErrCredentialNotFound reports a missing credential set.
 var (
-	ErrHostExists   = errors.New("host already exists")
-	ErrHostNotFound = errors.New("host not found")
+	ErrHostExists         = errors.New("host already exists")
+	ErrHostNotFound       = errors.New("host not found")
+	ErrCredentialNotFound = errors.New("credential set not found")
 )
 
 // Document is a config held as a YAML node tree, so mutations keep the
@@ -138,6 +140,117 @@ func (d *Document) RemoveHost(name string) error {
 	}
 	seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
 	return nil
+}
+
+// credentials returns the top-level credentials mapping, or nil when absent.
+func (d *Document) credentials() (*yaml.Node, error) {
+	m := d.root.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "credentials" {
+			if c := m.Content[i+1]; c.Kind == yaml.MappingNode {
+				return c, nil
+			}
+			return nil, errors.New("config: credentials must be a mapping of name to set")
+		}
+	}
+	return nil, nil
+}
+
+// SetCredential adds or replaces the named credential set, keeping the
+// comments and position of an existing one. A new credentials section goes
+// after defaults.
+func (d *Document) SetCredential(name string, set CredentialSet) error {
+	var n yaml.Node
+	if err := n.Encode(set); err != nil {
+		return err
+	}
+	creds, err := d.credentials()
+	if err != nil {
+		return err
+	}
+	if creds == nil {
+		creds = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if err := d.setTop("credentials", creds, 1); err != nil {
+			return err
+		}
+	}
+	for i := 0; i+1 < len(creds.Content); i += 2 {
+		if creds.Content[i].Value == name {
+			old := creds.Content[i+1]
+			n.HeadComment, n.LineComment, n.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			creds.Content[i+1] = &n
+			return nil
+		}
+	}
+	creds.Style = 0
+	creds.Content = append(creds.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, &n)
+	return nil
+}
+
+// SetDefaultCredential sets (or with "" removes) defaults.credential,
+// editing the defaults mapping in place so its other keys and comments stay.
+func (d *Document) SetDefaultCredential(name string) error {
+	m := d.root.Content[0]
+	var defs *yaml.Node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "defaults" {
+			defs = m.Content[i+1]
+		}
+	}
+	if defs == nil || (defs.Kind == yaml.ScalarNode && defs.Tag == "!!null") {
+		if name == "" {
+			return nil
+		}
+		if defs == nil {
+			defs = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			if err := d.setTop("defaults", defs, 0); err != nil {
+				return err
+			}
+		} else {
+			*defs = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		}
+	}
+	if defs.Kind != yaml.MappingNode {
+		return errors.New("config: defaults must be a mapping")
+	}
+	for i := 0; i+1 < len(defs.Content); i += 2 {
+		if defs.Content[i].Value == "credential" {
+			if name == "" {
+				defs.Content = append(defs.Content[:i], defs.Content[i+2:]...)
+			} else {
+				defs.Content[i+1].Value, defs.Content[i+1].Tag, defs.Content[i+1].Style = name, "!!str", 0
+			}
+			return nil
+		}
+	}
+	if name != "" {
+		defs.Content = append([]*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "credential"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+		}, defs.Content...)
+	}
+	return nil
+}
+
+// RemoveCredential deletes the named set, and the credentials section once
+// it is empty. References to it are left for Validate to report.
+func (d *Document) RemoveCredential(name string) error {
+	creds, err := d.credentials()
+	if err != nil {
+		return err
+	}
+	if creds != nil {
+		for i := 0; i+1 < len(creds.Content); i += 2 {
+			if creds.Content[i].Value == name {
+				creds.Content = append(creds.Content[:i], creds.Content[i+2:]...)
+				if len(creds.Content) == 0 {
+					d.deleteTop("credentials")
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrCredentialNotFound, name)
 }
 
 // Bytes encodes the document.

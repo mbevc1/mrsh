@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,14 +14,12 @@ import (
 
 const sharedFlagsHelp = "The address, group, user and identity file come from the global flags:\n" +
 	"  -H/--host ADDRESS, -g/--group GROUP, -u/--user USER, -i/--identity-file PATH.\n" +
-	"Set at most one of --user/--user-env/--user-arn and of --pass/--pass-env/--pass-arn."
+	"Set at most one of --user/--user-env/--user-arn and of --pass/--pass-env/--pass-arn.\n" +
+	"--credential NAME uses a credential set (see mrsh credentials); fields set on the host win."
 
-// hostFlags are the local flags of hosts add/update. The address, group,
-// user and identity file reuse the global -H, -g, -u and -i flags, which
-// have no other meaning for these commands.
-type hostFlags struct {
-	name    string
-	port    int
+// secretFlags are the user/pass variant flags shared by hosts add/update
+// and credentials set. The literal user comes from the global -u.
+type secretFlags struct {
 	userEnv string
 	userARN string
 	pass    string
@@ -28,17 +27,74 @@ type hostFlags struct {
 	passARN string
 }
 
-func (f *hostFlags) register(cmd *cobra.Command) {
+func (f *secretFlags) register(cmd *cobra.Command) {
 	fl := cmd.Flags()
-	fl.StringVar(&f.name, "name", "", "host name (unique key)")
-	fl.IntVar(&f.port, "port", 0, "SSH port (0 = use defaults)")
 	fl.StringVar(&f.userEnv, "user-env", "", "read the user from this environment variable")
 	fl.StringVar(&f.userARN, "user-arn", "", "read the user from this SSM or Secrets Manager ARN")
 	fl.StringVar(&f.pass, "pass", "", "literal password (visible in shell history; prefer --pass-env or --pass-arn)")
 	fl.StringVar(&f.passEnv, "pass-env", "", "read the password from this environment variable")
 	fl.StringVar(&f.passARN, "pass-arn", "", "read the password from this SSM or Secrets Manager ARN")
-	_ = cmd.MarkFlagRequired("name")
 	cmd.MarkFlagsMutuallyExclusive("pass", "pass-env", "pass-arn")
+}
+
+// apply copies supplied user/pass flags onto c; a supplied variant replaces
+// that whole field-group. It reports whether anything changed.
+func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.Credentials) (bool, error) {
+	changed := false
+	userFlags := map[string]string{"user": opts.user, "user-env": f.userEnv, "user-arn": f.userARN}
+	if name, v, ok, err := oneOf(cmd, userFlags); err != nil {
+		return false, err
+	} else if ok {
+		c.User, c.UserEnv, c.UserARN = "", "", ""
+		switch name {
+		case "user":
+			c.User = v
+		case "user-env":
+			c.UserEnv = v
+		case "user-arn":
+			c.UserARN = v
+		}
+		changed = true
+	}
+	passFlags := map[string]string{"pass": f.pass, "pass-env": f.passEnv, "pass-arn": f.passARN}
+	if name, v, ok, err := oneOf(cmd, passFlags); err != nil {
+		return false, err
+	} else if ok {
+		if name == "pass" {
+			slog.Warn("--pass stores the password in the config in the clear; prefer --pass-env or --pass-arn")
+		}
+		c.Pass, c.PassEnv, c.PassARN = "", "", ""
+		switch name {
+		case "pass":
+			c.Pass = v
+		case "pass-env":
+			c.PassEnv = v
+		case "pass-arn":
+			c.PassARN = v
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
+// hostFlags are the local flags of hosts add/update. The address, group,
+// user and identity file reuse the global -H, -g, -u and -i flags, which
+// have no other meaning for these commands.
+type hostFlags struct {
+	secretFlags
+	name       string
+	port       int
+	credential string
+}
+
+func (f *hostFlags) register(cmd *cobra.Command, opts *globalOptions) {
+	fl := cmd.Flags()
+	fl.StringVar(&f.name, "name", "", "host name (unique key)")
+	fl.IntVar(&f.port, "port", 0, "SSH port (0 = use defaults)")
+	fl.StringVar(&f.credential, "credential", "", "use this credential set; its user, pass and key apply where the host sets none (\"\" to clear)")
+	f.secretFlags.register(cmd)
+	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.RegisterFlagCompletionFunc("credential", completeCredentials(opts))
 }
 
 // apply copies every supplied flag onto h and reports whether anything
@@ -58,41 +114,14 @@ func (f *hostFlags) apply(cmd *cobra.Command, opts *globalOptions, h *config.Hos
 	if fl.Changed("port") {
 		h.Port, changed = f.port, true
 	}
+	if fl.Changed("credential") {
+		h.Credential, changed = f.credential, true
+	}
 	if fl.Changed("identity-file") {
 		h.IdentityFile, changed = opts.identityFile, true
 	}
-
-	userFlags := map[string]string{"user": opts.user, "user-env": f.userEnv, "user-arn": f.userARN}
-	if name, v, ok, err := oneOf(cmd, userFlags); err != nil {
-		return false, err
-	} else if ok {
-		h.User, h.UserEnv, h.UserARN = "", "", ""
-		switch name {
-		case "user":
-			h.User = v
-		case "user-env":
-			h.UserEnv = v
-		case "user-arn":
-			h.UserARN = v
-		}
-		changed = true
-	}
-	passFlags := map[string]string{"pass": f.pass, "pass-env": f.passEnv, "pass-arn": f.passARN}
-	if name, v, ok, err := oneOf(cmd, passFlags); err != nil {
-		return false, err
-	} else if ok {
-		h.Pass, h.PassEnv, h.PassARN = "", "", ""
-		switch name {
-		case "pass":
-			h.Pass = v
-		case "pass-env":
-			h.PassEnv = v
-		case "pass-arn":
-			h.PassARN = v
-		}
-		changed = true
-	}
-	return changed, nil
+	secrets, err := f.secretFlags.apply(cmd, opts, &h.Credentials)
+	return changed || secrets, err
 }
 
 // oneOf returns the single supplied flag among flags, erroring on several.
@@ -140,7 +169,7 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	f.register(cmd)
+	f.register(cmd, opts)
 	return cmd
 }
 
@@ -179,7 +208,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	f.register(cmd)
+	f.register(cmd, opts)
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
@@ -203,8 +232,8 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 				}
 				if !opts.yes && !asked {
 					asked = true
-					if !askYesNo(cmd, fmt.Sprintf("Remove host %s (%s) from %s? [y/N]: ", h.Name, h.Host, store.Location())) {
-						return errors.New("aborted")
+					if err := confirm(cmd, fmt.Sprintf("Remove host %s (%s) from %s? [y/N]: ", h.Name, h.Host, store.Location())); err != nil {
+						return err
 					}
 				}
 				return d.RemoveHost(name)
@@ -231,14 +260,29 @@ func findHost(cfg *config.Config, name string) (config.Host, bool) {
 	return config.Host{}, false
 }
 
-// askYesNo prompts on stderr and reads one line from stdin; anything but
-// y/yes (including EOF from a non-interactive stdin) means no.
-func askYesNo(cmd *cobra.Command, prompt string) bool {
+// errAborted is a "no" at a confirmation prompt.
+var errAborted = errors.New("aborted")
+
+// confirm prompts on stderr and reads one line from stdin: y/yes returns
+// nil, anything else (including EOF from a non-interactive stdin) returns
+// errAborted. Ctrl-C while it waits ends the command as interrupted; the
+// read itself cannot be cancelled, so it is left to the exiting process.
+func confirm(cmd *cobra.Command, prompt string) error {
 	_, _ = fmt.Fprint(cmd.ErrOrStderr(), prompt)
-	line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
+	answer := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		answer <- line
+	}()
+	select {
+	case <-cmd.Context().Done():
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr())
+		return errInterrupted
+	case line := <-answer:
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return nil
+		}
+		return errAborted
 	}
-	return false
 }

@@ -5,6 +5,11 @@
 #   <field>      literal value, taken verbatim
 #   <field>_env  name of an environment variable
 #   <field>_arn  AWS SSM parameter or Secrets Manager ARN (optional #json-key)
+#
+# Credential sets bundle a user, pass and identity_file that hosts (and
+# defaults) reuse with 'credential: NAME'. For each of user, pass and
+# identity_file a host uses its own value, else its set's, else defaults',
+# else the set named in defaults.
 
 defaults:
   user: deploy
@@ -15,6 +20,11 @@ defaults:
   identity_file: ~/.ssh/id_ed25519
   host_key_policy: accept-new   # strict | accept-new | insecure (built-in default: insecure)
   known_hosts: ~/.ssh/known_hosts
+
+credentials:
+  routers:
+    user: admin
+    pass_arn: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers/pass
 
 # Run by 'mrsh run' when no -c or --script is given.
 commands:
@@ -37,5 +47,10 @@ hosts:
   - name: rb01
     host: 10.0.0.254
     group: routers
-    user: admin
-    pass_arn: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/rb01/pass
+    credential: routers
+
+  - name: rb02             # the routers login, but its own password
+    host: 10.0.0.253
+    group: routers
+    credential: routers
+    pass_env: RB02_PASS

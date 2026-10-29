@@ -35,7 +35,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names, groups and credential set names complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
-Subcommands have short aliases too: `init` `i`, `example` `ex`, `copy` `cp`, `list` `l`/`ls`, `add` `a`, `update` `u`/`up`, `remove` `r`/`rm`, `set` `s`, `assign` `ass`. So `mrsh h ls` is `mrsh hosts list` and `mrsh creds rm` is `mrsh credentials remove`.
+Subcommands have short aliases too: `init` `i`, `example` `ex`, `copy` `cp`/`co`, `list` `l`/`ls`, `add` `a`, `update` `u`/`up`, `remove` `r`/`rm`, `set` `s`, `assign` `ass`. So `mrsh h ls` is `mrsh hosts list` and `mrsh creds rm` is `mrsh credentials remove`.
 
 ## Targeting hosts
 

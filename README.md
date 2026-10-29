@@ -27,7 +27,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 |---------|--------------|
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
 | `credentials list\|set\|remove\|rename\|default\|assign` (aliases `creds`, `cred`) | Manage reusable credential sets (user, pass, identity file): `default NAME` sets the one `defaults` uses, `assign --name NAME -g GROUP` (or `-H HOST`, or `--clear`) points many hosts at one, `rename` updates every reference. See [Secrets](#secrets). |
-| `hosts init\|example\|list\|add\|update\|remove` (aliases `host`, `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. |
+| `hosts init\|example\|list\|add\|update\|remove\|copy` (aliases `host`, `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. `copy --to DEST` moves the config between local paths and S3 (see [Config and output](#config-and-output)). |
 | `mt backup` (aliases `b`, `ba`, `bck`) | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot` (alias `re`), `mt upgrade` (alias `up`) | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware); each step ends in a reboot, so a device behind on both needs two runs. `mt upgrade --wait` instead waits for each reboot (up to 10 minutes per device) and takes every step in one run, ending with a fresh check. Both commands ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` (aliases `v`, `ver`) | Firmware and package versions across the fleet. |
@@ -35,7 +35,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names, groups and credential set names complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
-Subcommands have short aliases too: `init` `i`, `example` `ex`, `list` `l`/`ls`, `add` `a`, `update` `u`/`up`, `remove` `r`/`rm`, `set` `s`, `assign` `ass`. So `mrsh h ls` is `mrsh hosts list` and `mrsh creds rm` is `mrsh credentials remove`.
+Subcommands have short aliases too: `init` `i`, `example` `ex`, `copy` `cp`, `list` `l`/`ls`, `add` `a`, `update` `u`/`up`, `remove` `r`/`rm`, `set` `s`, `assign` `ass`. So `mrsh h ls` is `mrsh hosts list` and `mrsh creds rm` is `mrsh credentials remove`.
 
 ## Targeting hosts
 
@@ -81,7 +81,8 @@ Secrets are resolved only for the hosts a command targets, using the standard AW
 
 ## Config and output
 
-- `-f` takes a local path or `s3://bucket/key`. Edits from the CLI and `mrsh ui` are guarded: a write fails, then reloads and reapplies, if the file changed after it was read (a content hash locally, the ETag on S3).
+- `-f` takes a local path or `s3://bucket/key`, and defaults to `$MRSH_CONFIG` when set, else `hosts.yaml`. Edits from the CLI and `mrsh ui` are guarded: a write fails, then reloads and reapplies, if the file changed after it was read (a content hash locally, the ETag on S3).
+- To move the config, `mrsh -f hosts.yaml hosts copy --to s3://my-bucket/mrsh/hosts.yaml` validates it and copies it byte for byte (comments kept), in either direction. It never replaces an existing destination unless `--force`, honours `--sse`/`--kms-key`, warns if the config holds literal passwords, and leaves the source in place. Then `export MRSH_CONFIG=s3://my-bucket/mrsh/hosts.yaml` points every later command at it.
 - `--sse AES256|aws:kms` and `--kms-key ARN` encrypt S3 writes (config and backups).
 - Precedence: CLI flag > `MRSH_DEBUG` > `defaults` in the config > built-in default.
 - `-o text|full|json|csv`. `text` is a table showing the first output line per host (a failed host shows `failed` under EXIT when there is no remote exit status, and its error ahead of any output); `full` prints each host's complete output under a header line. Logs go to stderr, so `mrsh -o json run -c uptime | jq` works with `--debug` on.

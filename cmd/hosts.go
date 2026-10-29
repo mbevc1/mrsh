@@ -56,7 +56,7 @@ func newHostsCmd(opts *globalOptions) *cobra.Command {
 		Short:   "Manage the hosts config",
 	}
 	cmd.AddCommand(newHostsInitCmd(opts), newHostsExampleCmd(), newHostsListCmd(opts),
-		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts))
+		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts), newHostsCopyCmd(opts))
 	return cmd
 }
 
@@ -92,6 +92,61 @@ func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config")
+	return cmd
+}
+
+func newHostsCopyCmd(opts *globalOptions) *cobra.Command {
+	var to string
+	var force bool
+	cmd := &cobra.Command{
+		Use:     "copy --to DEST",
+		Aliases: []string{"cp"},
+		Short:   "Copy the config to another location (local path or s3://bucket/key)",
+		Long: "Copy the -f config, validated and byte for byte (comments kept), to --to: a local path\n" +
+			"or s3://bucket/key, in either direction. An existing destination is never replaced\n" +
+			"unless --force; --sse/--kms-key encrypt an S3 destination. The source is left in place.\n" +
+			"Point later commands at the copy with -f, or once with: export MRSH_CONFIG=DEST",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			lc, err := loadConfig(cmd, opts)
+			if err != nil {
+				return err
+			}
+			dstOpts := *opts
+			dstOpts.config = to
+			dst, err := openStore(&dstOpts)
+			if err != nil {
+				return err
+			}
+			if dst.Location() == lc.store.Location() {
+				return fmt.Errorf("source and destination are both %s", dst.Location())
+			}
+			ctx := cmd.Context()
+			ifVersion := "" // create-only
+			if force {
+				_, ver, err := dst.Load(ctx)
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return fmt.Errorf("read %s: %w", dst.Location(), err)
+				}
+				ifVersion = ver
+			}
+			err = dst.Save(ctx, lc.raw, ifVersion)
+			if errors.Is(err, config.ErrVersionConflict) && !force {
+				return fmt.Errorf("%s already exists (use --force to overwrite)", dst.Location())
+			}
+			if err != nil {
+				return fmt.Errorf("write %s: %w", dst.Location(), err)
+			}
+			// The secrets now live in a second place too; say so for the copy.
+			warnLiteralPasswords(lc.cfg, dst.Location(), "copy")
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "copied %s to %s\nuse it with: -f %s  (or: export MRSH_CONFIG=%s)\n",
+				lc.store.Location(), dst.Location(), to, to)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "destination: local path or s3://bucket/key")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config at the destination")
+	_ = cmd.MarkFlagRequired("to")
 	return cmd
 }
 

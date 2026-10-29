@@ -187,3 +187,66 @@ func TestHostsExample(t *testing.T) {
 		t.Fatalf("output differs from config.Example:\n%s", out)
 	}
 }
+
+func TestHostsCopy(t *testing.T) {
+	src := writeConfig(t, "# team routers\ndefaults: {user: admin}\nhosts:\n  - {name: rt1, host: 10.0.0.1, pass_env: RT1_PASS} # core\n")
+	dst := filepath.Join(t.TempDir(), "moved", "hosts.yaml")
+
+	out, errOut, err := runSplit(t, "-f", src, "hosts", "cp", "--to", dst)
+	if err != nil || !strings.Contains(out, "copied "+src+" to "+dst) || !strings.Contains(out, "export MRSH_CONFIG="+dst) || errOut != "" {
+		t.Fatalf("copy: err=%v\nout:%s\nerr:%s", err, out, errOut)
+	}
+	if got, want := readFile(t, dst), readFile(t, src); got != want {
+		t.Errorf("copy is not byte for byte:\n%s\nwant:\n%s", got, want)
+	}
+
+	// An existing destination is kept unless --force.
+	_ = os.WriteFile(src, []byte("hosts:\n  - {name: rt2, host: 10.0.0.2}\n"), 0o600)
+	if _, err := execRoot(t, "-f", src, "hosts", "copy", "--to", dst); err == nil || !strings.Contains(err.Error(), "already exists (use --force") {
+		t.Errorf("no-clobber: %v", err)
+	}
+	if !strings.Contains(readFile(t, dst), "rt1") {
+		t.Error("destination changed without --force")
+	}
+	if _, err := execRoot(t, "-f", src, "hosts", "copy", "--to", dst, "--force"); err != nil || readFile(t, dst) != readFile(t, src) {
+		t.Errorf("--force: %v", err)
+	}
+
+	// An invalid source is never copied; nor is a copy onto itself.
+	bad := writeConfig(t, "hosts:\n  - {name: x}\n")
+	other := filepath.Join(t.TempDir(), "x.yaml")
+	if _, err := execRoot(t, "-f", bad, "hosts", "copy", "--to", other); err == nil {
+		t.Error("copied an invalid config")
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Errorf("invalid copy left a file: %v", err)
+	}
+	if _, err := execRoot(t, "-f", src, "hosts", "copy", "--to", src); err == nil || !strings.Contains(err.Error(), "both") {
+		t.Errorf("self copy: %v", err)
+	}
+	if _, err := execRoot(t, "-f", src, "hosts", "copy"); err == nil || !strings.Contains(err.Error(), `"to" not set`) {
+		t.Errorf("missing --to: %v", err)
+	}
+}
+
+func TestHostsCopyWarnsAboutLiteralPasswords(t *testing.T) {
+	src := writeConfig(t, "hosts:\n  - {name: rt1, host: 10.0.0.1, pass: s3cret}\n")
+	dst := filepath.Join(t.TempDir(), "hosts.yaml")
+	_, errOut, err := runSplit(t, "-f", src, "hosts", "copy", "--to", dst)
+	if err != nil || !strings.Contains(errOut, src+" stores 1 literal password") || !strings.Contains(errOut, dst+" stores 1 literal password") {
+		t.Errorf("err=%v\nstderr:%s", err, errOut)
+	}
+}
+
+func TestConfigFromEnv(t *testing.T) {
+	cfg := writeConfig(t, "hosts:\n  - {name: from-env, host: 10.0.0.9}\n")
+	t.Setenv("MRSH_CONFIG", cfg)
+	if out, err := execRoot(t, "hosts", "list"); err != nil || !strings.Contains(out, "from-env") {
+		t.Errorf("MRSH_CONFIG: err=%v\n%s", err, out)
+	}
+	// -f still wins over the variable.
+	other := writeConfig(t, "hosts:\n  - {name: from-flag, host: 10.0.0.8}\n")
+	if out, err := execRoot(t, "-f", other, "hosts", "list"); err != nil || !strings.Contains(out, "from-flag") || strings.Contains(out, "from-env") {
+		t.Errorf("-f over MRSH_CONFIG: err=%v\n%s", err, out)
+	}
+}

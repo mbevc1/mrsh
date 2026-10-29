@@ -110,7 +110,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	// Register global flags on the root only; re-registering them on a
 	// subcommand silently breaks inheritance.
 	pf := root.PersistentFlags()
-	pf.StringVarP(&opts.config, "config", "f", "hosts.yaml", "config source: local path or s3://bucket/key")
+	pf.StringVarP(&opts.config, "config", "f", defaultConfig(), "config source: local path or s3://bucket/key (env MRSH_CONFIG)")
 	pf.StringVarP(&opts.group, "group", "g", "", "filter hosts by group")
 	// -h is reserved for --help, so --host uses -H. --hosts is normalized to
 	// --host (see flagAliases) rather than registered as a second flag: two
@@ -151,6 +151,16 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 		_ = root.RegisterFlagCompletionFunc(flag, fn)
 	}
 	return root, opts
+}
+
+// defaultConfig is the --config default: $MRSH_CONFIG, else hosts.yaml.
+// Setting it at registration (not in PersistentPreRun) means shell
+// completion, which skips the pre-run hooks, reads the same config.
+func defaultConfig() string {
+	if v := os.Getenv("MRSH_CONFIG"); v != "" {
+		return v
+	}
+	return "hosts.yaml"
 }
 
 var flagAliases = map[string]string{"hosts": "host", "yes": "assume-yes"}

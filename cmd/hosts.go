@@ -100,7 +100,7 @@ func newHostsCopyCmd(opts *globalOptions) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:     "copy --to DEST",
-		Aliases: []string{"cp", "co"},
+		Aliases: []string{"cp"},
 		Short:   "Copy the config to another location (local path or s3://bucket/key)",
 		Long: "Copy the -f config, validated and byte for byte (comments kept), to --to: a local path\n" +
 			"or s3://bucket/key, in either direction. An existing destination is never replaced\n" +

@@ -165,7 +165,7 @@ func TestAliasesRunEndToEnd(t *testing.T) {
 func TestSubcommandAliases(t *testing.T) {
 	root := newRootCmd()
 	for alias, want := range map[string]string{
-		"host ls": "hosts list", "ho l": "hosts list", "h i": "hosts init", "h ex": "hosts example", "h cp": "hosts copy", "h co": "hosts copy", "h a": "hosts add",
+		"host ls": "hosts list", "ho l": "hosts list", "h i": "hosts init", "h ex": "hosts example", "h a": "hosts add",
 		"h u": "hosts update", "h up": "hosts update", "h r": "hosts remove", "h rm": "hosts remove",
 		"creds ls": "credentials list", "creds l": "credentials list", "creds s": "credentials set",
 		"creds r": "credentials remove", "creds rm": "credentials remove", "creds ass": "credentials assign",

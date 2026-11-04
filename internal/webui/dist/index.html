@@ -10,7 +10,15 @@
 </head>
 <body>
 <header>
-  <div class="brand">mrsh <span>config</span></div>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect x="8" y="8" width="48" height="48" rx="11" fill="none" stroke="currentColor" stroke-width="4"/>
+      <path d="M20 23 L29 32 L20 41" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M33 41 H44" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round"/>
+      <g fill="currentColor"><circle cx="32" cy="8" r="6.5"/><circle cx="56" cy="32" r="6.5"/><circle cx="32" cy="56" r="6.5"/><circle cx="8" cy="32" r="6.5"/></g>
+    </svg>
+    <span class="brand-name">mrsh <span>config</span></span>
+  </div>
   <div class="where">
     <code id="location" class="where-path"></code>
     <button id="copy-location" type="button" class="icon" title="Copy config location" aria-label="Copy config location"></button>

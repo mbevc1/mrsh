@@ -216,7 +216,9 @@ func (c *Conn) Run(ctx context.Context, cmd string, stdin io.Reader) (stdout, st
 	case <-ctx.Done():
 		_ = sess.Signal(gossh.SIGKILL)
 		_ = sess.Close()
-		<-done
+		if werr := <-done; werr != nil { // the kill is the outcome; its wait result is detail
+			slog.Debug("ssh command killed", "addr", c.addr, "wait", werr)
+		}
 		return out.String(), errOut.String(), -1, fmt.Errorf("ssh %s: %w", c.addr, ctx.Err())
 	}
 

@@ -36,7 +36,12 @@ func startUI(t *testing.T, cfg string) func(path, body string) (int, []byte) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- root.ExecuteContext(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("mrsh ui did not stop cleanly: %v", err)
+		}
+	})
 
 	var url string
 	select {

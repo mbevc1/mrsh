@@ -29,8 +29,9 @@ button.icon:hover, button.icon:focus-visible { color: var(--accent); }
 button.icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .offscreen { position: fixed; left: -9999px; top: 0; }
 .banner { margin: 12px 20px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); }
-.tabs { display: flex; gap: 4px; padding: 12px 20px 0; }
-.tabs button { background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; }
+/* On a narrow screen the tab strip scrolls on its own instead of widening the page. */
+.tabs { display: flex; gap: 4px; padding: 12px 20px 0; overflow-x: auto; scrollbar-width: thin; }
+.tabs button { flex: none; white-space: nowrap; background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
 main { padding: 16px 20px 40px; }
 button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); padding: 6px 14px; border-radius: 6px; cursor: pointer; }
@@ -120,6 +121,10 @@ dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--p
 dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 code { font-family: var(--mono); font-size: 12px; }
 @media (max-width: 600px) {
-  .grid-form { grid-template-columns: 1fr; }
+  /* minmax(0, …), min-width: 0 and width: 100% let fields shrink to the
+     screen; a fieldset otherwise refuses to go below its content's width. */
+  .grid-form { grid-template-columns: minmax(0, 1fr); }
+  .grid-form label, .grid-form fieldset { min-width: 0; }
+  .grid-form label input, .grid-form label select, .grid-form fieldset input, .grid-form fieldset select { width: 100%; min-width: 0; box-sizing: border-box; }
   header { flex-wrap: wrap; }
 }

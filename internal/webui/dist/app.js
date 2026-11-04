@@ -741,7 +741,10 @@ async function saveCommands(ev) {
 }
 
 function selectTab(name) {
-  for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  for (const b of document.querySelectorAll(".tabs button")) {
+    b.setAttribute("aria-selected", String(b.dataset.tab === name));
+    if (b.dataset.tab === name) b.scrollIntoView({ block: "nearest", inline: "nearest" }); // a narrow, scrolled tab strip
+  }
   for (const t of ["hosts", "credentials", "defaults", "commands", "test", "upgrade"]) $(`#tab-${t}`).hidden = t !== name;
 }
 

@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo/mrsh-dark.svg">
+  <img alt="mrsh logo" src="assets/logo/mrsh.svg" width="96" height="96">
+</picture>
+
 # mrsh
 
 Multi Remote SHell: run commands over SSH on many hosts in parallel, with MikroTik RouterOS shortcuts, secrets kept out of the config file, and config and backups stored locally or in S3.

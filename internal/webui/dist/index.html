@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mrsh config</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect x="8" y="8" width="48" height="48" rx="11" fill="none" stroke="currentColor" stroke-width="4"/>
+      <path d="M20 23 L29 32 L20 41" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M33 41 H44" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round"/>
+      <g fill="currentColor"><circle cx="32" cy="8" r="6.5"/><circle cx="56" cy="32" r="6.5"/><circle cx="32" cy="56" r="6.5"/><circle cx="8" cy="32" r="6.5"/></g>
+    </svg>
+    <span class="brand-name">mrsh <span>config</span></span>
+  </div>
+  <div class="where">
+    <code id="location" class="where-path"></code>
+    <button id="copy-location" type="button" class="icon" title="Copy config location" aria-label="Copy config location"></button>
+  </div>
+  <button id="reload" type="button" class="ghost" data-busy="Reloading…">Reload</button>
+  <button id="exit" type="button" class="ghost danger" data-busy="Exiting…" title="Stop mrsh ui and close this tab">Exit</button>
+</header>
+<div id="banner" class="banner" hidden></div>
+<nav class="tabs" role="tablist">
+  <button type="button" role="tab" data-tab="hosts" aria-selected="true">Hosts</button>
+  <button type="button" role="tab" data-tab="credentials">Credentials</button>
+  <button type="button" role="tab" data-tab="defaults">Defaults</button>
+  <button type="button" role="tab" data-tab="commands">Commands</button>
+  <button type="button" role="tab" data-tab="test">Test</button>
+  <button type="button" role="tab" data-tab="upgrade">Upgrade</button>
+</nav>
+<section id="stopped" class="stopped" hidden>
+  <h1>mrsh ui has stopped</h1>
+  <p>You can close this tab. Run <code>mrsh ui</code> again to keep editing.</p>
+</section>
+<main>
+  <section id="tab-hosts">
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search name, host or group" aria-label="Search hosts">
+      <select id="group-filter" aria-label="Filter by group"><option value="">All groups</option></select>
+      <span class="count" id="count"></span>
+      <button id="add" type="button">Add host</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th></th></tr></thead>
+        <tbody id="hosts"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="empty" hidden>No hosts yet. Add one, or run <code>mrsh hosts add</code>.</p>
+  </section>
+
+  <section id="tab-credentials" hidden>
+    <p class="hint">Named sets of user, password and key that hosts (and Defaults) can reuse. A host's own user, password or key still wins over its set.</p>
+    <div class="toolbar">
+      <span class="count" id="cred-count"></span>
+      <button id="cred-add" type="button">Add credential</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>User</th><th>Pass</th><th>Identity</th><th>Used by</th><th></th></tr></thead>
+        <tbody id="creds"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="cred-empty" hidden>No credential sets yet. Add one, or run <code>mrsh credentials set</code>.</p>
+  </section>
+
+  <section id="tab-defaults" hidden>
+    <form id="defaults-form" class="grid-form">
+      <label>Port <input name="port" type="number" min="0" max="65535"></label>
+      <label>Timeout (s) <input name="timeout" type="number" min="0"></label>
+      <label>Parallel <input name="parallel" type="number" min="0"></label>
+      <label>Output
+        <select name="output"><option value="">(built-in)</option><option>text</option><option>full</option><option>json</option><option>csv</option></select>
+      </label>
+      <label>Host key policy
+        <select name="host_key_policy"><option value="">(built-in: insecure)</option><option>strict</option><option>accept-new</option><option>insecure</option></select>
+      </label>
+      <label class="wide">Credential set
+        <select name="credential" class="cred-select"><option value="">None</option></select>
+      </label>
+      <label class="wide">Identity file <input name="identity_file" placeholder="~/.ssh/id_ed25519"></label>
+      <label class="wide">known_hosts <input name="known_hosts" placeholder="~/.ssh/known_hosts"></label>
+      <label class="check"><input name="debug" type="checkbox"> Debug logging</label>
+      <fieldset class="wide secret" data-secret="user"></fieldset>
+      <fieldset class="wide secret" data-secret="pass"></fieldset>
+      <ul class="errors wide" id="defaults-errors"></ul>
+      <div class="actions wide"><button type="submit" data-busy="Saving…">Save defaults</button></div>
+    </form>
+  </section>
+
+  <section id="tab-test" hidden>
+    <p class="hint note"><svg class="hint-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg><span>Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</span></p>
+    <div class="toolbar">
+      <select id="test-group" aria-label="Hosts to test"><option value="">All groups</option></select>
+      <button id="test-run" type="button" data-busy="Testing…">Test selected</button>
+      <span class="count" id="test-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="test-table">
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="test-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
+        <tbody id="test-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-upgrade" hidden>
+    <p class="hint warn"><svg class="hint-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg><span>Runs the next <code>mrsh mt upgrade</code> step on each ticked device: a newer RouterOS, otherwise routerboard firmware, then a reboot. <em>Finish all steps</em> waits through the reboots and takes every step, like <code>--wait</code>. Dry run changes nothing.</span></p>
+    <div class="toolbar">
+      <select id="upgrade-group" aria-label="Hosts to upgrade"><option value="">All groups</option></select>
+      <button id="upgrade-dry" type="button" class="ghost" data-busy="Checking…">Dry run</button>
+      <button id="upgrade-run" type="button" class="danger-fill" data-busy="Upgrading…">Upgrade selected</button>
+      <label class="check"><input id="upgrade-wait" type="checkbox" checked> Finish all steps (waits for reboots)</label>
+      <span class="count" id="upgrade-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="test-table">
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="upgrade-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
+        <tbody id="upgrade-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-commands" hidden>
+    <p class="hint">Commands run by <code>mrsh run</code> when no <code>-c</code> or <code>--script</code> is given, one per line.</p>
+    <form id="commands-form">
+      <textarea id="commands" rows="10" spellcheck="false"></textarea>
+      <ul class="errors" id="commands-errors"></ul>
+      <div class="actions"><button type="submit" data-busy="Saving…">Save commands</button></div>
+    </form>
+  </section>
+</main>
+
+<dialog id="editor">
+  <form id="host-form" class="grid-form" method="dialog">
+    <h2 id="editor-title">Add host</h2>
+    <label>Name <input name="name" required autocomplete="off"></label>
+    <label>Host <input name="host" required autocomplete="off" placeholder="10.0.0.1 or router.lan"></label>
+    <label>Group <input name="group" list="groups" autocomplete="off"></label>
+    <label>Port <input name="port" type="number" min="0" max="65535" placeholder="default"></label>
+    <label class="wide">Credential set
+      <select name="credential" class="cred-select"><option value="">None (use Defaults)</option></select>
+      <small class="secret-hint">User, password and key set below override the set's.</small>
+    </label>
+    <label class="wide">Identity file <input name="identity_file" placeholder="default"></label>
+    <label class="wide">known_hosts <input name="known_hosts" placeholder="default"></label>
+    <fieldset class="wide secret" data-secret="user"></fieldset>
+    <fieldset class="wide secret" data-secret="pass"></fieldset>
+    <ul class="errors wide" id="host-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="cancel">Cancel</button>
+      <button type="submit" id="save" data-busy="Saving…">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="cred-editor">
+  <form id="cred-form" class="grid-form" method="dialog">
+    <h2 id="cred-title">Add credential</h2>
+    <label class="wide">Name <input name="name" required autocomplete="off" placeholder="routers"></label>
+    <label class="wide">Identity file <input name="identity_file" placeholder="not set"></label>
+    <fieldset class="wide secret" data-secret="user"></fieldset>
+    <fieldset class="wide secret" data-secret="pass"></fieldset>
+    <ul class="errors wide" id="cred-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="cred-cancel">Cancel</button>
+      <button type="submit" id="cred-save" data-busy="Saving…">Save</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="groups"></datalist>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<template id="secret-template">
+  <legend></legend>
+  <div class="secret-row">
+    <select class="kind" aria-label="Source">
+      <option value="unset">Not set</option>
+      <option value="plain">Literal</option>
+      <option value="env">Environment variable</option>
+      <option value="arn">AWS ARN (SSM / Secrets Manager)</option>
+    </select>
+    <input class="value" autocomplete="off" spellcheck="false">
+  </div>
+  <small class="secret-hint"></small>
+</template>
+</body>
+</html>

@@ -1,0 +1,243 @@
+package cmd
+
+import (
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"strconv"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+
+	"github.com/mbevc1/mrsh/internal/config"
+)
+
+const starterConfig = `# mrsh hosts config
+defaults:
+  port: 22
+  timeout: 30
+  parallel: 5
+  output: text
+  host_key_policy: insecure   # strict | accept-new | insecure
+  # user: deploy
+  # identity_file: ~/.ssh/id_ed25519
+  # known_hosts: ~/.ssh/known_hosts
+
+# Commands to run when 'mrsh run' gets no -c/--script.
+# commands:
+#   - uptime
+
+# Reusable logins: hosts (or defaults) use one with 'credential: NAME', and
+# a host's own user, pass or identity_file still wins over the set's.
+# credentials:
+#   routers:
+#     user: admin
+#     pass_env: ROUTERS_PASS
+
+hosts: []
+# Set at most one of pass, pass_env or pass_arn per host (same for user):
+#  - name: web01
+#    host: 10.0.0.1
+#    group: web
+#    pass_env: WEB01_PASS
+#  - name: rb01
+#    host: 10.0.0.254
+#    credential: routers
+`
+
+func newHostsCmd(opts *globalOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "hosts",
+		Aliases: []string{"host", "ho", "h"},
+		Short:   "Manage the hosts config",
+	}
+	cmd.AddCommand(newHostsInitCmd(opts), newHostsExampleCmd(), newHostsListCmd(opts),
+		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts), newHostsCopyCmd(opts))
+	return cmd
+}
+
+func newHostsInitCmd(opts *globalOptions) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:     "init",
+		Aliases: []string{"i"},
+		Short:   "Create a starter hosts.yaml",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			store, err := openStore(opts)
+			if err != nil {
+				return err
+			}
+			ifVersion := ""
+			if force {
+				_, ver, err := store.Load(cmd.Context())
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+				ifVersion = ver
+			}
+			err = store.Save(cmd.Context(), []byte(starterConfig), ifVersion)
+			if errors.Is(err, config.ErrVersionConflict) && !force {
+				return fmt.Errorf("%s already exists (use --force to overwrite)", store.Location())
+			}
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", store.Location())
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config")
+	return cmd
+}
+
+func newHostsCopyCmd(opts *globalOptions) *cobra.Command {
+	var to string
+	var force bool
+	cmd := &cobra.Command{
+		Use:     "copy --to DEST",
+		Aliases: []string{"cp"},
+		Short:   "Copy the config to another location (local path or s3://bucket/key)",
+		Long: "Copy the -f config, validated and byte for byte (comments kept), to --to: a local path\n" +
+			"or s3://bucket/key, in either direction. An existing destination is never replaced\n" +
+			"unless --force; --sse/--kms-key encrypt an S3 destination. The source is left in place.\n" +
+			"Point later commands at the copy with -f, or once with: export MRSH_CONFIG=DEST",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			lc, err := loadConfig(cmd, opts)
+			if err != nil {
+				return err
+			}
+			dstOpts := *opts
+			dstOpts.config = to
+			dst, err := openStore(&dstOpts)
+			if err != nil {
+				return err
+			}
+			if dst.Location() == lc.store.Location() {
+				return fmt.Errorf("source and destination are both %s", dst.Location())
+			}
+			ctx := cmd.Context()
+			ifVersion := "" // create-only
+			if force {
+				_, ver, err := dst.Load(ctx)
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return fmt.Errorf("read %s: %w", dst.Location(), err)
+				}
+				ifVersion = ver
+			}
+			err = dst.Save(ctx, lc.raw, ifVersion)
+			if errors.Is(err, config.ErrVersionConflict) && !force {
+				return fmt.Errorf("%s already exists (use --force to overwrite)", dst.Location())
+			}
+			if err != nil {
+				return fmt.Errorf("write %s: %w", dst.Location(), err)
+			}
+			// The secrets now live in a second place too; say so for the copy.
+			warnLiteralPasswords(lc.cfg, dst.Location(), "copy")
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "copied %s to %s\nuse it with: -f %s  (or: export MRSH_CONFIG=%s)\n",
+				lc.store.Location(), dst.Location(), to, to)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "destination: local path or s3://bucket/key")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config at the destination")
+	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
+func newHostsExampleCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "example",
+		Aliases: []string{"ex"},
+		Short:   "Print an annotated example config",
+		Long:    "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := cmd.OutOrStdout().Write(config.Example)
+			return err
+		},
+	}
+}
+
+// hostRow is one `hosts list` entry, with secrets already masked or shown.
+type hostRow struct {
+	Name         string `json:"name"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	Group        string `json:"group"`
+	Credential   string `json:"credential"`
+	User         string `json:"user"`
+	Pass         string `json:"pass"`
+	IdentityFile string `json:"identity_file"`
+}
+
+func newHostsListCmd(opts *globalOptions) *cobra.Command {
+	var showSecrets bool
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"l", "ls"},
+		Short:   "List hosts (passwords masked unless --show-secrets)",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			lc, err := loadConfig(cmd, opts)
+			if err != nil {
+				return err
+			}
+			hosts, unmatched := lc.cfg.Select(opts.group, opts.hosts)
+			for _, n := range unmatched {
+				slog.Debug("--host not found in config", "host", n)
+			}
+			rows := make([]hostRow, 0, len(hosts))
+			for _, h := range hosts {
+				e := lc.cfg.Effective(h)
+				rows = append(rows, hostRow{
+					Name: e.Name, Host: e.Host, Port: e.Port, Group: e.Group, Credential: e.Credential,
+					User:         e.UserRef().Display(true), // usernames are not secret
+					Pass:         e.PassRef().Display(showSecrets),
+					IdentityFile: e.IdentityFile,
+				})
+			}
+			return writeHostRows(cmd.OutOrStdout(), opts.output, rows)
+		},
+	}
+	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "reveal literal passwords (references are never resolved)")
+	return cmd
+}
+
+func writeHostRows(w io.Writer, format string, rows []hostRow) error {
+	switch format {
+	case "json":
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rows)
+	case "text", "full": // already complete, so full is the same table
+		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "NAME\tHOST\tPORT\tGROUP\tCREDENTIAL\tUSER\tPASS\tIDENTITY")
+		for _, r := range rows {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				r.Name, r.Host, strconv.Itoa(r.Port), dash(r.Group), dash(r.Credential), dash(r.User), dash(r.Pass), dash(r.IdentityFile))
+		}
+		return tw.Flush()
+	case "csv":
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"name", "host", "port", "group", "credential", "user", "pass", "identity_file"})
+		for _, r := range rows {
+			_ = cw.Write([]string{r.Name, r.Host, strconv.Itoa(r.Port), r.Group, r.Credential, r.User, r.Pass, r.IdentityFile})
+		}
+		cw.Flush()
+		return cw.Error()
+	}
+	return fmt.Errorf("unknown output format %q", format)
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}

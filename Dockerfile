@@ -2,7 +2,7 @@
 
 # Build on the native platform and cross-compile, so multi-arch builds need
 # no emulation (the runtime stage only copies files).
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local
 WORKDIR /src

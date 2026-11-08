@@ -319,50 +319,94 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+// upgradePlan is the next upgrade step for one device.
+type upgradePlan struct {
+	Action     string // upgradeInstall, upgradeFirmware or upgradeNone
+	Installed  string // RouterOS version
+	Latest     string // newer RouterOS on the channel (install only)
+	FirmwareRB string // current routerboard firmware (firmware only)
+	UpgradeFW  string // firmware the installed RouterOS ships (firmware only)
+}
+
+const (
+	upgradeInstall  = "install"
+	upgradeFirmware = "firmware"
+	upgradeNone     = "none"
+)
+
+// describe is the message for the step, as done (dry=false) or as planned.
+func (p upgradePlan) describe(dry bool) string {
+	switch {
+	case p.Action == upgradeInstall && dry:
+		return fmt.Sprintf("would install RouterOS %s -> %s", p.Installed, p.Latest)
+	case p.Action == upgradeInstall:
+		return fmt.Sprintf("installing RouterOS %s -> %s (device reboots; run again for firmware)", p.Installed, p.Latest)
+	case p.Action == upgradeFirmware && dry:
+		return fmt.Sprintf("would upgrade firmware %s -> %s and reboot", p.FirmwareRB, p.UpgradeFW)
+	case p.Action == upgradeFirmware:
+		return fmt.Sprintf("firmware %s -> %s, rebooting", p.FirmwareRB, p.UpgradeFW)
+	}
+	return fmt.Sprintf("up to date (RouterOS %s)", p.Installed)
+}
+
 // upgradeOne performs (or with dry, describes) the next upgrade step.
 func upgradeOne(ctx context.Context, conn *ssh.Conn, dry bool) (string, error) {
-	if _, _, _, err := conn.Run(ctx, mt.CheckUpdatesCmd, nil); err != nil {
+	plan, err := planUpgrade(ctx, conn)
+	if err != nil {
 		return "", err
+	}
+	if !dry {
+		if err := applyUpgrade(ctx, conn, plan); err != nil {
+			return "", err
+		}
+	}
+	return plan.describe(dry), nil
+}
+
+// planUpgrade checks the channel and firmware without changing the device
+// (beyond RouterOS refreshing its own update status).
+func planUpgrade(ctx context.Context, conn *ssh.Conn) (upgradePlan, error) {
+	if _, _, _, err := conn.Run(ctx, mt.CheckUpdatesCmd, nil); err != nil {
+		return upgradePlan{}, err
 	}
 	status, err := pollUpdate(ctx, conn)
 	if err != nil {
-		return "", err
+		return upgradePlan{}, err
 	}
+	plan := upgradePlan{Action: upgradeNone, Installed: status.Installed}
 	if status.Available() {
-		if dry {
-			return fmt.Sprintf("would install RouterOS %s -> %s", status.Installed, status.Latest), nil
-		}
-		if err := expectDisconnect(conn.Run(ctx, mt.InstallUpdatesCmd, nil)); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("installing RouterOS %s -> %s (device reboots; run again for firmware)", status.Installed, status.Latest), nil
+		plan.Action, plan.Latest = upgradeInstall, status.Latest
+		return plan, nil
 	}
-
 	rbOut, _, _, err := conn.Run(ctx, mt.RouterboardCmd, nil)
 	if err != nil {
-		return "", err
+		return upgradePlan{}, err
 	}
-	v, _ := mt.ParseVersion(rbOut, "ros="+status.Installed)
-	if !v.FirmwarePending() {
-		return fmt.Sprintf("up to date (RouterOS %s)", status.Installed), nil
+	if v, _ := mt.ParseVersion(rbOut, "ros="+status.Installed); v.FirmwarePending() {
+		plan.Action, plan.FirmwareRB, plan.UpgradeFW = upgradeFirmware, v.FirmwareRB, v.UpgradeFW
 	}
-	if dry {
-		return fmt.Sprintf("would upgrade firmware %s -> %s and reboot", v.FirmwareRB, v.UpgradeFW), nil
+	return plan, nil
+}
+
+// applyUpgrade runs the planned step; both steps end in a reboot.
+func applyUpgrade(ctx context.Context, conn *ssh.Conn, plan upgradePlan) error {
+	switch plan.Action {
+	case upgradeInstall:
+		return expectDisconnect(conn.Run(ctx, mt.InstallUpdatesCmd, nil))
+	case upgradeFirmware:
+		out, errOut, code, err := conn.Run(ctx, mt.FirmwareUpgrade, nil)
+		if err == nil && code != 0 {
+			err = fmt.Errorf("firmware upgrade exited %d: %s", code, strings.TrimSpace(errOut+out))
+		}
+		if err == nil {
+			err = mt.CheckOutput(out + errOut)
+		}
+		if err != nil {
+			return err
+		}
+		return expectDisconnect(conn.Run(ctx, mt.RebootCmd, nil))
 	}
-	out, errOut, code, err := conn.Run(ctx, mt.FirmwareUpgrade, nil)
-	if err == nil && code != 0 {
-		err = fmt.Errorf("firmware upgrade exited %d: %s", code, strings.TrimSpace(errOut+out))
-	}
-	if err == nil {
-		err = mt.CheckOutput(out + errOut)
-	}
-	if err != nil {
-		return "", err
-	}
-	if err := expectDisconnect(conn.Run(ctx, mt.RebootCmd, nil)); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("firmware %s -> %s, rebooting", v.FirmwareRB, v.UpgradeFW), nil
+	return nil
 }
 
 // pollUpdate waits for check-for-updates to finish.

@@ -14,7 +14,7 @@ const token = (() => {
 })();
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const state = { version: "", cfg: null, editing: null };
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set() }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -29,7 +29,7 @@ async function api(method, path, body) {
   if (body !== undefined) headers["Content-Type"] = "application/json";
   // Every write carries the version this page loaded, so a stale tab
   // cannot overwrite a newer change.
-  if (method !== "GET" && path !== "/api/validate") headers["If-Match"] = state.version;
+  if (method !== "GET" && path !== "/api/validate" && path !== "/api/test" && !path.startsWith("/api/upgrade/")) headers["If-Match"] = state.version;
   const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new APIError(res.status, data);
@@ -45,9 +45,10 @@ function banner(msg) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, failed = false) {
   const t = $("#toast");
   t.textContent = msg;
+  t.classList.toggle("fail", failed);
   t.hidden = false;
   t.classList.remove("show");
   void t.offsetWidth; // restart the fade-in when toasts follow each other
@@ -57,6 +58,50 @@ function toast(msg) {
 }
 
 const clock = () => new Date().toLocaleTimeString();
+
+// copyIcon builds the usual copy glyph: a full page in front of the visible
+// corner of one behind it. SVG, since CSP forbids inline styles.
+function copyIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const front = document.createElementNS(ns, "rect");
+  for (const [k, v] of Object.entries({ x: 9, y: 9, width: 12, height: 12, rx: 2 })) front.setAttribute(k, v);
+  const back = document.createElementNS(ns, "path");
+  back.setAttribute("d", "M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1");
+  svg.append(front, back);
+  return svg;
+}
+
+// copyText uses the Clipboard API (loopback counts as a secure context),
+// falling back to a hidden textarea for older browsers.
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.className = "offscreen";
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) { toast(`Could not copy ${what}`); return; }
+  }
+  toast(`Copied ${what}: ${text}`);
+}
+
+function copyButton(text, what, title = `Copy ${what}`) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "icon";
+  b.title = title;
+  b.setAttribute("aria-label", b.title);
+  b.append(copyIcon());
+  b.addEventListener("click", () => copyText(text, what));
+  return b;
+}
 
 // busy disables btn and shows label while fn runs. On loopback most calls
 // finish in a few milliseconds, so the state stays up for at least 200 ms
@@ -137,6 +182,30 @@ function cell(text, cls) {
   return td;
 }
 
+const shellQuote = (s) => /^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`;
+
+// sshCommand builds the ssh invocation from the host's effective settings.
+// A user held in an env var or ARN is unresolved here, so it is left out;
+// passwords never appear (ssh takes none on the command line).
+function sshCommand(h, d) {
+  const user = h.user.kind !== "unset" ? h.user : d.user;
+  const port = h.port || d.port || 22;
+  const identity = h.identity_file || d.identity_file;
+  const args = ["ssh"];
+  if (port !== 22) args.push("-p", String(port));
+  if (identity) args.push("-i", shellQuote(identity));
+  args.push(user.kind === "plain" && user.value ? `${shellQuote(user.value)}@${h.host}` : h.host);
+  return { cmd: args.join(" "), userLeftOut: user.kind === "env" || user.kind === "arn" };
+}
+
+function hostCell(h) {
+  const td = cell(h.host);
+  const { cmd, userLeftOut } = sshCommand(h, state.cfg.defaults);
+  td.append(copyButton(cmd, `ssh command for ${h.name}`,
+    userLeftOut ? "Copy ssh command (user comes from an env var or ARN, so it is left out)" : "Copy ssh command"));
+  return td;
+}
+
 function render() {
   const cfg = state.cfg;
   $("#location").textContent = cfg.location;
@@ -152,9 +221,150 @@ function render() {
   }
   filter.value = cfg.groups.includes(current) ? current : "";
 
+  const testGroup = $("#test-group");
+  const testCurrent = testGroup.value;
+  testGroup.replaceChildren(new Option("All groups", ""), ...cfg.groups.map((g) => new Option(g, g)));
+  testGroup.value = cfg.groups.includes(testCurrent) ? testCurrent : "";
+  const upgradeGroup = $("#upgrade-group");
+  const upgradeCurrent = upgradeGroup.value;
+  upgradeGroup.replaceChildren(new Option("All groups", ""), ...cfg.groups.map((g) => new Option(g, g)));
+  upgradeGroup.value = cfg.groups.includes(upgradeCurrent) ? upgradeCurrent : "";
+  const names = new Set(cfg.hosts.map((h) => h.name));
+  for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
+  for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
+  for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
+
   renderHosts();
+  renderTests();
+  renderUpgrades();
   renderDefaults();
   $("#commands").value = cfg.commands.join("\n");
+}
+
+// statusBadge shows a host's last result from results (tests or upgrades),
+// or nothing before one.
+function statusBadge(name, results = state.tests) {
+  const r = results[name];
+  const span = document.createElement("span");
+  if (!r) return span;
+  if (r.running) {
+    span.className = "badge running"; span.textContent = "testing…";
+  } else {
+    span.className = r.ok ? "badge ok" : "badge fail";
+    span.textContent = `${r.ok ? "✓" : "✗"} ${r.summary}`;
+    span.title = r.detail; // the full message, e.g. with the address and wrapping context
+  }
+  return span;
+}
+
+function statusCell(name, results = state.tests) {
+  const td = document.createElement("td");
+  td.className = "status";
+  td.append(statusBadge(name, results));
+  return td;
+}
+
+const fmtMs = (r) => r && !r.running && r.ms > 0 ? (r.ms < 1000 ? `${r.ms} ms` : `${(r.ms / 1000).toFixed(1)} s`) : "";
+
+function upgradeNames() {
+  const group = $("#upgrade-group").value;
+  return state.cfg.hosts.filter((h) => !group || h.group === group).map((h) => h.name);
+}
+
+function renderUpgrades() {
+  const shown = upgradeNames();
+  const tbody = $("#upgrade-rows");
+  tbody.replaceChildren();
+  for (const h of state.cfg.hosts.filter((h) => shown.includes(h.name))) {
+    const r = state.upgrades[h.name];
+    const pick = document.createElement("input");
+    pick.type = "checkbox"; pick.checked = state.picked.has(h.name);
+    pick.setAttribute("aria-label", `Select ${h.name}`);
+    pick.addEventListener("change", () => {
+      if (pick.checked) state.picked.add(h.name); else state.picked.delete(h.name);
+      renderUpgrades();
+    });
+    const pickCell = document.createElement("td");
+    pickCell.className = "check";
+    pickCell.append(pick);
+    const tr = document.createElement("tr");
+    tr.append(pickCell, cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"),
+      r ? statusCell(h.name, state.upgrades) : cell("", "status"), cell(fmtMs(r), "num"));
+    tbody.append(tr);
+  }
+  const picked = shown.filter((n) => state.picked.has(n));
+  $("#upgrade-all").checked = shown.length > 0 && picked.length === shown.length;
+  $("#upgrade-all").indeterminate = picked.length > 0 && picked.length < shown.length;
+  $("#upgrade-count").textContent = `${picked.length} of ${shown.length} selected`;
+  $("#upgrade-run").disabled = $("#upgrade-dry").disabled = picked.length === 0;
+}
+
+// runUpgrades runs the `mt upgrade` step (or its dry run) on the ticked hosts.
+async function runUpgrades(apply) {
+  const names = upgradeNames().filter((n) => state.picked.has(n));
+  if (!names.length) return;
+  if (apply && !confirm(`Upgrade ${names.length} device(s)? Each installs updates and reboots:\n\n${names.join("\n")}`)) return;
+  const btn = apply ? $("#upgrade-run") : $("#upgrade-dry");
+  for (const n of names) state.upgrades[n] = { running: true };
+  renderUpgrades();
+  await busy(btn, apply ? "Upgrading…" : "Checking…", async () => {
+    try {
+      const { results } = await api("POST", apply ? "/api/upgrade/apply" : "/api/upgrade/dry", { hosts: names, confirm: apply });
+      for (const r of results) {
+        state.upgrades[r.name] = { ok: r.ok, summary: r.summary || r.detail, detail: r.detail, ms: r.duration_ms, action: r.action };
+      }
+      const failed = results.filter((r) => !r.ok).length;
+      const acted = results.filter((r) => r.ok && r.action !== "none").length;
+      toast(apply ? `${acted} upgrading, ${results.length - acted - failed} up to date, ${failed} failed`
+        : `${acted} would upgrade, ${results.length - acted - failed} up to date, ${failed} failed`, failed > 0);
+    } catch (err) {
+      for (const n of names) delete state.upgrades[n];
+      banner(`${apply ? "Upgrade" : "Dry run"} failed: ${err.message}`);
+    }
+  });
+  renderUpgrades();
+}
+
+// runTests asks the server to connect to the named saved hosts.
+async function runTests(names, btn) {
+  if (!names.length) return;
+  for (const n of names) state.tests[n] = { running: true };
+  renderHosts(); renderTests();
+  await busy(btn, "Testing…", async () => {
+    try {
+      const { results } = await api("POST", "/api/test", { hosts: names });
+      for (const r of results) state.tests[r.name] = { ok: r.ok, summary: r.summary || r.detail, detail: r.detail, ms: r.duration_ms };
+      const ok = results.filter((r) => r.ok).length;
+      toast(results.length === 1 ? `${results[0].name}: ${results[0].summary || results[0].detail}` : `${ok} of ${results.length} hosts OK`,
+        ok < results.length);
+    } catch (err) {
+      for (const n of names) delete state.tests[n];
+      banner(`Test failed: ${err.message}`);
+    }
+  });
+  renderHosts(); renderTests();
+}
+
+function testNames() {
+  const group = $("#test-group").value;
+  return state.cfg.hosts.filter((h) => !group || h.group === group).map((h) => h.name);
+}
+
+function renderTests() {
+  const names = new Set(testNames());
+  const tbody = $("#test-rows");
+  tbody.replaceChildren();
+  for (const h of state.cfg.hosts.filter((h) => names.has(h.name))) {
+    const r = state.tests[h.name];
+    const result = r ? statusCell(h.name) : cell("not tested", "status muted");
+    // A host that failed before connecting (e.g. an unset env var) has no time.
+    const ms = fmtMs(r);
+    const tr = document.createElement("tr");
+    tr.append(cell(h.name), cell(h.host), cell(h.group || "-", h.group ? "" : "muted"), result, cell(ms, "num"));
+    tbody.append(tr);
+  }
+  $("#test-count").textContent = `${names.size} host${names.size === 1 ? "" : "s"}`;
+  $("#test-run").disabled = names.size === 0;
 }
 
 function renderHosts() {
@@ -169,20 +379,25 @@ function renderHosts() {
   for (const h of rows) {
     const tr = document.createElement("tr");
     tr.append(
-      cell(h.name), cell(h.host), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
+      cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
       cell(secretText(h.user) || "default", "ref"), cell(secretText(h.pass) || "default", "ref"),
       cell(h.identity_file || "default", h.identity_file ? "ref" : "muted"),
+      statusCell(h.name),
     );
     const actions = document.createElement("td");
     actions.className = "actions";
+    const test = document.createElement("button");
+    test.type = "button"; test.className = "link"; test.textContent = "Test";
+    test.title = "Connect and run a read-only version check";
+    test.addEventListener("click", () => runTests([h.name], test));
     const edit = document.createElement("button");
     edit.type = "button"; edit.className = "link"; edit.textContent = "Edit";
     edit.addEventListener("click", () => openEditor(h));
     const del = document.createElement("button");
     del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
     del.addEventListener("click", () => removeHost(h, del));
-    actions.append(edit, del);
+    actions.append(test, edit, del);
     tr.append(actions);
     tbody.append(tr);
   }
@@ -268,6 +483,8 @@ async function saveHost(ev) {
       if (editing) await api("PUT", `/api/hosts/${encodeURIComponent(editing)}`, host);
       else await api("POST", "/api/hosts", host);
       $("#editor").close();
+      delete state.tests[host.name]; // an earlier result no longer describes this entry
+      if (editing) delete state.tests[editing];
       await load();
       toast(editing ? `Saved ${host.name}` : `Added ${host.name}`);
     } catch (err) {
@@ -337,7 +554,7 @@ async function saveCommands(ev) {
 
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["hosts", "defaults", "commands"]) $(`#tab-${t}`).hidden = t !== name;
+  for (const t of ["hosts", "defaults", "commands", "test", "upgrade"]) $(`#tab-${t}`).hidden = t !== name;
 }
 
 let heartbeatTimer;
@@ -385,6 +602,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#commands-form").addEventListener("submit", saveCommands);
   $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
+  $("#test-group").addEventListener("change", renderTests);
+  $("#upgrade-group").addEventListener("change", renderUpgrades);
+  $("#upgrade-all").addEventListener("change", (e) => {
+    for (const n of upgradeNames()) if (e.target.checked) state.picked.add(n); else state.picked.delete(n);
+    renderUpgrades();
+  });
+  $("#upgrade-dry").addEventListener("click", () => runUpgrades(false));
+  $("#upgrade-run").addEventListener("click", () => runUpgrades(true));
+  $("#test-run").addEventListener("click", () => runTests(testNames(), $("#test-run")));
+  $("#copy-location").append(copyIcon());
+  $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();
   heartbeatTimer = setInterval(heartbeat, 5000);
 });

@@ -10,7 +10,10 @@
 <body>
 <header>
   <div class="brand">mrsh <span>config</span></div>
-  <div class="where" id="location"></div>
+  <div class="where">
+    <code id="location" class="where-path"></code>
+    <button id="copy-location" type="button" class="icon" title="Copy config location" aria-label="Copy config location"></button>
+  </div>
   <button id="reload" type="button" class="ghost">Reload</button>
   <button id="exit" type="button" class="ghost danger" title="Stop mrsh ui and close this tab">Exit</button>
 </header>
@@ -19,6 +22,8 @@
   <button type="button" role="tab" data-tab="hosts" aria-selected="true">Hosts</button>
   <button type="button" role="tab" data-tab="defaults">Defaults</button>
   <button type="button" role="tab" data-tab="commands">Commands</button>
+  <button type="button" role="tab" data-tab="test">Test</button>
+  <button type="button" role="tab" data-tab="upgrade">Upgrade</button>
 </nav>
 <section id="stopped" class="stopped" hidden>
   <h1>mrsh ui has stopped</h1>
@@ -34,7 +39,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th></th></tr></thead>
         <tbody id="hosts"></tbody>
       </table>
     </div>
@@ -60,6 +65,40 @@
       <ul class="errors wide" id="defaults-errors"></ul>
       <div class="actions wide"><button type="submit">Save defaults</button></div>
     </form>
+  </section>
+
+  <section id="tab-test" hidden>
+    <p class="hint">Connects to saved hosts and runs a read-only version check. Secrets are resolved on this machine; nothing is changed on the hosts.</p>
+    <div class="toolbar">
+      <select id="test-group" aria-label="Hosts to test"><option value="">All groups</option></select>
+      <button id="test-run" type="button">Test hosts</button>
+      <span class="count" id="test-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="test-table">
+        <thead><tr><th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th></tr></thead>
+        <tbody id="test-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-upgrade" hidden>
+    <p class="hint warn"><svg class="warn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg><span>Upgrade runs the same step as <code>mrsh mt upgrade</code> on each ticked device: install a newer RouterOS, otherwise upgrade routerboard firmware, then reboot. Run it again after devices come back to take the next step. Dry run only reports what it would do.</span></p>
+    <div class="toolbar">
+      <select id="upgrade-group" aria-label="Hosts to upgrade"><option value="">All groups</option></select>
+      <button id="upgrade-dry" type="button" class="ghost">Dry run</button>
+      <button id="upgrade-run" type="button" class="danger-fill">Upgrade selected</button>
+      <span class="count" id="upgrade-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="test-table">
+        <thead><tr>
+          <th class="check"><input type="checkbox" id="upgrade-all" aria-label="Select all shown hosts"></th>
+          <th>Name</th><th>Host</th><th>Group</th><th class="status">Result</th><th class="time">Time</th>
+        </tr></thead>
+        <tbody id="upgrade-rows"></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="tab-commands" hidden>

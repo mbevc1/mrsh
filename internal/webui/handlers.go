@@ -171,6 +171,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 		s.requestQuit()
 	})
 	mux.HandleFunc("GET /api/config", s.getConfig)
+	mux.HandleFunc("POST /api/test", s.testHosts)
+	mux.HandleFunc("POST /api/upgrade/dry", s.upgradeHosts(false))
+	mux.HandleFunc("POST /api/upgrade/apply", s.upgradeHosts(true))
 	mux.HandleFunc("POST /api/validate", s.validate)
 	mux.HandleFunc("POST /api/hosts", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v HostView

@@ -34,7 +34,7 @@ func TestS3ConfigHostsLifecycle(t *testing.T) {
 	if _, err := execRoot(t, "-f", uri, "hosts", "update", "--name", "web01", "-g", "db"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := execRoot(t, "-f", uri, "hosts", "remove", "--name", "web01", "--confirm"); err != nil {
+	if _, err := execRoot(t, "-f", uri, "hosts", "remove", "--name", "web01", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := config.Parse(fake.Object("cfg", "mrsh/hosts.yaml").Data)
@@ -74,7 +74,7 @@ func TestS3MtBackup(t *testing.T) {
 		t.Fatalf("objects: rsc=%+v bin=%+v", rsc, bin)
 	}
 	// The device keeps its rolling files.
-	if _, err := os.Stat(f.root + "/backup-Mon.rsc"); err != nil {
+	if _, err := os.Stat(f.root + "/backups/Mon.rsc"); err != nil {
 		t.Error(err)
 	}
 }

@@ -284,9 +284,10 @@ func loginUser(u string) string {
 	return ""
 }
 
-// WarnIfInsecure logs one warning per run when host keys go unchecked.
-func WarnIfInsecure(policy string, targets int) {
-	if targets > 0 && (policy == ssh.PolicyInsecure || policy == "") {
+// WarnIfInsecure logs one warning per run when host keys go unchecked
+// because nobody chose a policy; an explicit insecure is left alone.
+func WarnIfInsecure(policy string, chosen bool, targets int) {
+	if targets > 0 && !chosen && (policy == ssh.PolicyInsecure || policy == "") {
 		slog.Warn("host key checking disabled (host_key_policy=insecure); use --host-key-policy strict or accept-new to verify hosts")
 	}
 }

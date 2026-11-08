@@ -45,7 +45,7 @@ func newHostsCmd(opts *globalOptions) *cobra.Command {
 		Aliases: []string{"ho", "h"},
 		Short:   "Manage the hosts config",
 	}
-	cmd.AddCommand(newHostsInitCmd(opts), newHostsListCmd(opts),
+	cmd.AddCommand(newHostsInitCmd(opts), newHostsExampleCmd(), newHostsListCmd(opts),
 		newHostsAddCmd(opts), newHostsUpdateCmd(opts), newHostsRemoveCmd(opts))
 	return cmd
 }
@@ -82,6 +82,19 @@ func newHostsInitCmd(opts *globalOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config")
 	return cmd
+}
+
+func newHostsExampleCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "example",
+		Short: "Print an annotated example config",
+		Long:  "Print an annotated example config.\nSave it as a starting point with: mrsh hosts example > hosts.yaml",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := cmd.OutOrStdout().Write(config.Example)
+			return err
+		},
+	}
 }
 
 // hostRow is one `hosts list` entry, with secrets already masked or shown.
@@ -133,7 +146,7 @@ func writeHostRows(w io.Writer, format string, rows []hostRow) error {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
-	case "text":
+	case "text", "full": // already complete, so full is the same table
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 		_, _ = fmt.Fprintln(tw, "NAME\tHOST\tPORT\tGROUP\tUSER\tPASS\tIDENTITY")
 		for _, r := range rows {

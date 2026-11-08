@@ -35,6 +35,6 @@ go.work.sum
 /mrsh
 /dist/
 
-# Local config (may hold secrets); hosts.example.yaml is the template
+# Local config (may hold secrets); `mrsh hosts example` prints a template
 /hosts.yaml
 /backups/

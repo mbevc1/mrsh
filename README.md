@@ -19,16 +19,16 @@ mrsh -g web -p 5 run -c uptime                    # run on the web group, 5 at a
 mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 ```
 
-`hosts.example.yaml` shows every config option.
+`mrsh hosts example` prints an annotated example config ([source](internal/config/example.yaml)).
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
-| `hosts init\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `list` masks literal passwords unless `--show-secrets`. |
-| `mt backup` | Export `.rsc` and binary `.backup` files on each router (kept on the device as a rolling 7-day set), then download dated copies to `--path` (a local dir or `s3://bucket/prefix/`). |
-| `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `--confirm`. |
+| `hosts init\|example\|list\|add\|update\|remove` (aliases `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. |
+| `mt backup` | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
+| `mt reboot`, `mt upgrade` | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware). Both ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` | Firmware and package versions across the fleet. |
 | `ui` | A local browser editor for the same config (loopback only; edits config, never runs commands). |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names and groups complete from the config. |
@@ -54,14 +54,14 @@ Secrets are resolved only for the hosts a command targets, using the standard AW
 
 ## Host keys
 
-`--host-key-policy` (or `defaults.host_key_policy`) is `insecure` by default, and mrsh prints a warning on each run. Use `accept-new` to record keys on first connect and reject any later change, or `strict` to require entries in `--known-hosts` (default `~/.ssh/known_hosts`).
+`--host-key-policy` (or `defaults.host_key_policy`) is `insecure` by default, and mrsh prints a warning on stderr each run until you set a policy explicitly (setting `insecure` yourself silences it). Use `accept-new` to record keys on first connect and reject any later change, or `strict` to require entries in `--known-hosts` (default `~/.ssh/known_hosts`).
 
 ## Config and output
 
 - `-f` takes a local path or `s3://bucket/key`. Edits from the CLI and `mrsh ui` are guarded: a write fails, then reloads and reapplies, if the file changed after it was read (a content hash locally, the ETag on S3).
 - `--sse AES256|aws:kms` and `--kms-key ARN` encrypt S3 writes (config and backups).
 - Precedence: CLI flag > `MRSH_DEBUG` > `defaults` in the config > built-in default.
-- `-o text|json|csv`. Logs go to stderr, so `mrsh -o json run -c uptime | jq` works with `--debug` on.
+- `-o text|full|json|csv`. `text` is a table showing the first output line per host (a failed host shows `failed` under EXIT when there is no remote exit status, and its error ahead of any output); `full` prints each host's complete output under a header line. Logs go to stderr, so `mrsh -o json run -c uptime | jq` works with `--debug` on.
 - Exit codes: `0` all hosts ok, `1` any host failed or exited non-zero, `2` usage or config error, `130` interrupted.
 
 ## Container image
@@ -96,7 +96,7 @@ aws cloudformation deploy --stack-name mrsh-backup --capabilities CAPABILITY_IAM
 Things to know:
 
 - **Paths:** use `s3://` for the config and backups; the container filesystem is read-only apart from `/tmp`.
-- **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `--confirm`.
+- **Prompts:** there is no terminal, so `mt reboot`, `mt upgrade` and `hosts remove` need `-y` / `--assume-yes`.
 - **No replays:** retries are off, so a failed reboot or upgrade is not repeated.
 - **Host keys:** `/tmp` does not survive between runs, so `accept-new` cannot remember hosts. For verified host keys, use `strict` with a `known_hosts` file baked into a derived image.
 

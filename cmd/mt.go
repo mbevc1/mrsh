@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -52,8 +53,9 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Export and download config backups",
-		Long: "Writes backup-<Day>.rsc / .backup on each device (a rolling 7-day set kept on the device),\n" +
-			"then downloads dated copies over SFTP to --path as <group>/<name>/<YYYY-MM-DD>.<ext>.",
+		Long: "Writes backups/<Day>.rsc / .backup on each device (a rolling 7-day set kept on the device),\n" +
+			"then downloads them over SFTP to --path as <group>/<name>/<Day>.<ext> for a local dir,\n" +
+			"or <group>/<name>/<YYYY-MM-DD>.<ext> for S3 (expire old copies with a lifecycle rule).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			exts, err := mt.Formats(format)
@@ -71,9 +73,14 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			day, date := mt.Weekday(now()), now()
+			day := mt.Weekday(now())
+			// A local dir mirrors the device's weekday set; S3 keeps history.
+			stem := day
+			if _, local := sink.(*storage.LocalSink); !local {
+				stem = now().Format("2006-01-02")
+			}
 			if opts.dryRun {
-				var cmds []string
+				cmds := []string{mt.EnsureBackupDirCmd}
 				for _, ext := range exts {
 					cmds = append(cmds, backupCmd(ext, day))
 				}
@@ -88,17 +95,27 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 			}
 			results := runner.Execute(ctx, targets, opts.parallel, runner.WithConn(connOptions(opts),
 				func(ctx context.Context, conn *ssh.Conn, t runner.Target, res *runner.Result) {
+					if err := runChecked(ctx, conn, mt.EnsureBackupDirCmd); err != nil {
+						res.Err, res.ExitCode = err, -1
+						return
+					}
 					var saved []string
 					for _, ext := range exts {
-						key := mt.BackupKey(t.Group, t.Name, t.Literal, date, ext)
+						key := mt.BackupKey(t.Group, t.Name, t.Literal, stem, ext)
 						n, err := backupOne(ctx, conn, day, ext, sink, key)
 						if err != nil {
 							res.Err, res.ExitCode = err, -1
 							break
 						}
-						saved = append(saved, fmt.Sprintf("saved %s (%d bytes)", key, n))
+						name := key
+						if len(saved) > 0 {
+							name = path.Base(key) // the folder is already named once
+						}
+						saved = append(saved, fmt.Sprintf("%s (%s)", name, humanBytes(n)))
 					}
-					res.Stdout = strings.Join(saved, "\n")
+					if len(saved) > 0 {
+						res.Stdout = "saved " + strings.Join(saved, ", ")
+					}
 				}))
 			if err := runner.Write(cmd.OutOrStdout(), opts.output, results); err != nil {
 				return err
@@ -112,6 +129,18 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+// humanBytes formats n in binary units with one decimal, e.g. "14.0 KiB".
+func humanBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	v, unit := float64(n)/1024, 0
+	for v >= 1024 && unit < 2 {
+		v, unit = v/1024, unit+1
+	}
+	return fmt.Sprintf("%.1f %s", v, []string{"KiB", "MiB", "GiB"}[unit])
+}
+
 func backupCmd(ext, day string) string {
 	if ext == "rsc" {
 		return mt.ExportCmd(day)
@@ -122,14 +151,7 @@ func backupCmd(ext, day string) string {
 // backupOne writes one backup file on the device, waits for it, and streams
 // it into the sink. The device copy stays as the rolling weekday backup.
 func backupOne(ctx context.Context, conn *ssh.Conn, day, ext string, sink storage.Sink, key string) (int64, error) {
-	stdout, stderr, code, err := conn.Run(ctx, backupCmd(ext, day), nil)
-	if err == nil && code != 0 {
-		err = fmt.Errorf("%s exited %d: %s", backupCmd(ext, day), code, strings.TrimSpace(stderr+stdout))
-	}
-	if err == nil {
-		err = mt.CheckOutput(stdout + stderr)
-	}
-	if err != nil {
+	if err := runChecked(ctx, conn, backupCmd(ext, day)); err != nil {
 		return 0, err
 	}
 	remote, err := waitForFile(ctx, conn, mt.BackupBase(day)+"."+ext)
@@ -146,6 +168,19 @@ func backupOne(ctx context.Context, conn *ssh.Conn, day, ext string, sink storag
 	n, err := sink.Write(ctx, key, pr)
 	_ = pr.CloseWithError(err) // unblock the download if the sink failed
 	return n, err
+}
+
+// runChecked runs a RouterOS command and fails on a non-zero exit or on a
+// RouterOS error message in the output.
+func runChecked(ctx context.Context, conn *ssh.Conn, command string) error {
+	stdout, stderr, code, err := conn.Run(ctx, command, nil)
+	if err == nil && code != 0 {
+		err = fmt.Errorf("%s exited %d: %s", command, code, strings.TrimSpace(stderr+stdout))
+	}
+	if err == nil {
+		err = mt.CheckOutput(stdout + stderr)
+	}
+	return err
 }
 
 // waitForFile polls until the file exists (at the root or under flash/) with
@@ -188,10 +223,9 @@ func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) 
 }
 
 func newMtRebootCmd(opts *globalOptions) *cobra.Command {
-	var confirm bool
 	cmd := &cobra.Command{
 		Use:   "reboot",
-		Short: "Reboot devices (asks for confirmation unless --confirm)",
+		Short: "Reboot devices (asks for confirmation unless -y/--assume-yes)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targets, err := mtTargets(cmd, opts)
@@ -201,7 +235,7 @@ func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 			if opts.dryRun {
 				return printDryRun(cmd.OutOrStdout(), targets, mt.RebootCmd, nil)
 			}
-			if !confirm {
+			if !opts.yes {
 				if err := confirmTargets(cmd, "reboot", targets); err != nil {
 					return err
 				}
@@ -224,7 +258,6 @@ func newMtRebootCmd(opts *globalOptions) *cobra.Command {
 			return outcome(ctx, results)
 		},
 	}
-	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	return cmd
 }
 
@@ -243,7 +276,6 @@ func expectDisconnect(stdout, stderr string, code int, err error) error {
 }
 
 func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
-	var confirm bool
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Check and install RouterOS updates, then routerboard firmware",
@@ -260,7 +292,7 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			dry := opts.dryRun
-			if !dry && !confirm {
+			if !dry && !opts.yes {
 				if err := confirmTargets(cmd, "upgrade (and reboot)", targets); err != nil {
 					return err
 				}
@@ -284,7 +316,6 @@ func newMtUpgradeCmd(opts *globalOptions) *cobra.Command {
 			return outcome(ctx, results)
 		},
 	}
-	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	return cmd
 }
 

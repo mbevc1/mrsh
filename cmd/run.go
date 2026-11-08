@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,14 +39,9 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			targets, err := runner.Targets(lc.cfg, runner.TargetOptions{
-				Group: opts.group, Hosts: opts.hosts, User: opts.user, IdentityFile: opts.identityFile,
-			})
+			targets, err := selectTargets(lc, opts)
 			if err != nil {
 				return err
-			}
-			if len(targets) == 0 {
-				return errors.New("no target hosts (check --group/--host and the config)")
 			}
 			out := cmd.OutOrStdout()
 			if opts.dryRun {
@@ -53,39 +49,72 @@ func newRunCmd(opts *globalOptions) *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			if err := runner.Resolve(ctx, newResolver(), targets); err != nil {
+			if err := prepareConnect(ctx, opts, targets); err != nil {
 				return err
 			}
-			runner.WarnIfInsecure(opts.hostKeyPolicy, len(targets))
+			co := connOptions(opts)
 			results := runner.Execute(ctx, targets, opts.parallel, runner.RunCommand(runner.CommandOptions{
-				Command:  remote,
-				Stdin:    stdin,
-				Timeout:  time.Duration(opts.timeout) * time.Second,
-				HostKeys: &ssh.HostKeyChecker{},
-				Policy:   opts.hostKeyPolicy,
+				Command: remote, Stdin: stdin, Timeout: co.Timeout, HostKeys: co.HostKeys, Policy: co.Policy,
 			}))
 			if err := runner.Write(out, opts.output, results); err != nil {
 				return err
 			}
-			if ctx.Err() != nil {
-				return &exitCodeError{code: exitInterrupted, msg: "interrupted"}
-			}
-			failed := 0
-			for _, r := range results {
-				if r.Failed() {
-					failed++
-				}
-			}
-			if failed > 0 {
-				return &exitCodeError{code: exitHostFailed, msg: fmt.Sprintf("%d of %d hosts failed", failed, len(results))}
-			}
-			return nil
+			return outcome(ctx, results)
 		},
 	}
 	cmd.Flags().StringVarP(&command, "command", "c", "", "command to run")
 	cmd.Flags().StringVar(&script, "script", "", "local script file to run remotely via 'sh -s'")
 	cmd.MarkFlagsMutuallyExclusive("command", "script")
 	return cmd
+}
+
+// selectTargets applies --group/--host/--user/--identity-file to the config.
+func selectTargets(lc *loadedConfig, opts *globalOptions) ([]runner.Target, error) {
+	targets, err := runner.Targets(lc.cfg, runner.TargetOptions{
+		Group: opts.group, Hosts: opts.hosts, User: opts.user, IdentityFile: opts.identityFile,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return nil, errors.New("no target hosts (check --group/--host and the config)")
+	}
+	return targets, nil
+}
+
+// prepareConnect resolves secrets for the targets only, then warns once if
+// host keys go unchecked.
+func prepareConnect(ctx context.Context, opts *globalOptions, targets []runner.Target) error {
+	if err := runner.Resolve(ctx, newResolver(), targets); err != nil {
+		return err
+	}
+	runner.WarnIfInsecure(opts.hostKeyPolicy, len(targets))
+	return nil
+}
+
+func connOptions(opts *globalOptions) runner.ConnOptions {
+	return runner.ConnOptions{
+		Timeout:  time.Duration(opts.timeout) * time.Second,
+		HostKeys: &ssh.HostKeyChecker{},
+		Policy:   opts.hostKeyPolicy,
+	}
+}
+
+// outcome maps results to the process exit: interrupted, any host failed, or ok.
+func outcome(ctx context.Context, results []runner.Result) error {
+	if ctx.Err() != nil {
+		return &exitCodeError{code: exitInterrupted, msg: "interrupted"}
+	}
+	failed := 0
+	for _, r := range results {
+		if r.Failed() {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return &exitCodeError{code: exitHostFailed, msg: fmt.Sprintf("%d of %d hosts failed", failed, len(results))}
+	}
+	return nil
 }
 
 // commandToRun picks the remote command and optional stdin: -c, then

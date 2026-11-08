@@ -49,7 +49,7 @@ func mtTargets(cmd *cobra.Command, opts *globalOptions) ([]runner.Target, error)
 }
 
 func newMtBackupCmd(opts *globalOptions) *cobra.Command {
-	var format, dest, sse, kmsKey string
+	var format, dest string
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Export and download config backups",
@@ -61,17 +61,14 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if kmsKey != "" {
-				sse = "aws:kms"
-			}
-			if sse != "" && sse != "AES256" && sse != "aws:kms" {
-				return fmt.Errorf("invalid --sse %q: must be AES256 or aws:kms", sse)
+			if err := opts.sse().Validate(); err != nil {
+				return err
 			}
 			targets, err := mtTargets(cmd, opts)
 			if err != nil {
 				return err
 			}
-			sink, err := storage.NewSink(dest, storage.SinkOptions{SSE: sse, KMSKey: kmsKey})
+			sink, err := storage.NewSink(dest, storage.SinkOptions{SSE: opts.sseMode, KMSKey: opts.kmsKey})
 			if err != nil {
 				return err
 			}
@@ -84,6 +81,9 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 				return printDryRun(cmd.OutOrStdout(), targets, strings.Join(cmds, "\n"), nil)
 			}
 			ctx := cmd.Context()
+			if err := sink.Preflight(ctx); err != nil {
+				return fmt.Errorf("backup destination %s: %w", sink.Location(), err)
+			}
 			if err := prepareConnect(ctx, opts, targets); err != nil {
 				return err
 			}
@@ -109,8 +109,6 @@ func newMtBackupCmd(opts *globalOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", mt.FormatBoth, "rsc|backup|both")
 	cmd.Flags().StringVar(&dest, "path", "backups/", "destination: local dir or s3://bucket/prefix/")
-	cmd.Flags().StringVar(&sse, "sse", "", "S3 server-side encryption: AES256|aws:kms (s3 only)")
-	cmd.Flags().StringVar(&kmsKey, "kms-key", "", "KMS key ARN for SSE-KMS (implies --sse aws:kms)")
 	return cmd
 }
 

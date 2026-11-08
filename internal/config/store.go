@@ -1,19 +1,29 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gofrs/flock"
+
+	"github.com/mbevc1/mrsh/internal/s3client"
 )
 
 // lockRetry is how often Save retries a held lock until ctx expires.
@@ -23,8 +33,6 @@ var (
 	// ErrVersionConflict means the config changed since it was loaded (or
 	// already exists, for a create-only save). Reload and reapply.
 	ErrVersionConflict = errors.New("config changed since it was loaded; reload and retry")
-	// ErrNotImplemented is returned by stores not built yet.
-	ErrNotImplemented = errors.New("not implemented")
 )
 
 // ConfigStore reads and conditionally writes the raw config, wherever it lives.
@@ -38,9 +46,14 @@ type ConfigStore interface {
 	Location() string
 }
 
+// StoreOptions are S3-only settings; local stores ignore them.
+type StoreOptions struct {
+	SSE s3client.SSE // encryption for S3Store.Save
+}
+
 // NewStore dispatches on the URI scheme: none or "file" gives a LocalStore,
 // "s3" an S3Store.
-func NewStore(uri string) (ConfigStore, error) {
+func NewStore(uri string, opts StoreOptions) (ConfigStore, error) {
 	if uri == "" {
 		return nil, errors.New("config location is empty")
 	}
@@ -69,7 +82,7 @@ func NewStore(uri string) (ConfigStore, error) {
 		if u.Host == "" || key == "" || strings.HasSuffix(key, "/") {
 			return nil, fmt.Errorf("invalid config location %q: want s3://bucket/key", uri)
 		}
-		return &S3Store{Bucket: u.Host, Key: key}, nil
+		return &S3Store{Bucket: u.Host, Key: key, SSE: opts.SSE}, nil
 	}
 	return nil, fmt.Errorf("invalid config location %q: unsupported scheme %q", uri, u.Scheme)
 }
@@ -153,19 +166,86 @@ func digest(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// S3Store keeps the config in an S3 object with ETag optimistic locking.
-// Implemented in Phase 6.
+// S3Store keeps the config in an S3 object. The version is the object
+// ETag; Save is a conditional PutObject (If-Match, or If-None-Match: * for
+// create-only), so a concurrent writer on another machine is detected
+// instead of silently overwritten.
 type S3Store struct {
 	Bucket string
 	Key    string
+	SSE    s3client.SSE
+
+	mu     sync.Mutex
+	client *s3.Client
 }
 
 func (s *S3Store) Location() string { return "s3://" + s.Bucket + "/" + s.Key }
 
-func (s *S3Store) Load(context.Context) ([]byte, string, error) {
-	return nil, "", fmt.Errorf("s3 config store: %w", ErrNotImplemented)
+func (s *S3Store) api(ctx context.Context) (*s3.Client, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		c, err := s3client.New(ctx, s.Bucket)
+		if err != nil {
+			return nil, err
+		}
+		s.client = c
+	}
+	return s.client, nil
 }
 
-func (s *S3Store) Save(context.Context, []byte, string) error {
-	return fmt.Errorf("s3 config store: %w", ErrNotImplemented)
+func (s *S3Store) Load(ctx context.Context) ([]byte, string, error) {
+	c, err := s.api(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	out, err := c.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.Bucket), Key: aws.String(s.Key)})
+	var noKey *s3types.NoSuchKey
+	if errors.As(err, &noKey) || httpStatus(err) == http.StatusNotFound {
+		return nil, "", fmt.Errorf("%s: %w", s.Location(), fs.ErrNotExist)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = out.Body.Close() }()
+	raw, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return raw, aws.ToString(out.ETag), nil
+}
+
+func (s *S3Store) Save(ctx context.Context, raw []byte, ifVersion string) error {
+	c, err := s.api(ctx)
+	if err != nil {
+		return err
+	}
+	mode, kmsKey := s.SSE.Apply()
+	in := &s3.PutObjectInput{
+		Bucket:               aws.String(s.Bucket),
+		Key:                  aws.String(s.Key),
+		Body:                 bytes.NewReader(raw),
+		ContentType:          aws.String("application/yaml"),
+		ServerSideEncryption: mode,
+		SSEKMSKeyId:          kmsKey,
+	}
+	if ifVersion == "" {
+		in.IfNoneMatch = aws.String("*")
+	} else {
+		in.IfMatch = aws.String(ifVersion)
+	}
+	_, err = c.PutObject(ctx, in)
+	switch httpStatus(err) {
+	case http.StatusPreconditionFailed, http.StatusConflict:
+		return ErrVersionConflict
+	}
+	return err
+}
+
+func httpStatus(err error) int {
+	var re *awshttp.ResponseError
+	if errors.As(err, &re) {
+		return re.HTTPStatusCode()
+	}
+	return 0
 }

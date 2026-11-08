@@ -13,14 +13,15 @@ import (
 func TestNewSinkDispatch(t *testing.T) {
 	tests := []struct {
 		uri  string
-		want string // local dir, "notimpl" or "error"
+		want string // local dir, "s3:<bucket>|<prefix>" or "error"
 	}{
 		{"backups/", "backups/"},
 		{"./backups", "./backups"},
 		{"/var/lib/mrsh/backups/", "/var/lib/mrsh/backups/"},
 		{"file:///var/backups", "/var/backups"},
 		{`C:\backups`, `C:\backups`},
-		{"s3://bucket/prefix/", "notimpl"},
+		{"s3://bucket/mrsh/backups/", "s3:bucket|mrsh/backups"},
+		{"s3://bucket", "s3:bucket|"},
 		{"s3:///prefix", "error"},
 		{"gs://bucket/x", "error"},
 		{"file://host/x", "error"},
@@ -30,9 +31,10 @@ func TestNewSinkDispatch(t *testing.T) {
 		s, err := NewSink(tt.uri, SinkOptions{SSE: "AES256"})
 		got := "error"
 		switch {
-		case errors.Is(err, ErrNotImplemented):
-			got = "notimpl"
-		case err == nil:
+		case err != nil:
+		case isS3(s):
+			got = "s3:" + s.(*S3Sink).Bucket + "|" + s.(*S3Sink).Prefix
+		default:
 			got = s.(*LocalSink).Dir
 		}
 		if got != tt.want {
@@ -97,3 +99,5 @@ func TestCleanKey(t *testing.T) {
 		t.Errorf("good key: %q %v", k, err)
 	}
 }
+
+func isS3(s Sink) bool { _, ok := s.(*S3Sink); return ok }

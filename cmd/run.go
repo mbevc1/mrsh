@@ -103,7 +103,7 @@ func connOptions(opts *globalOptions) runner.ConnOptions {
 // outcome maps results to the process exit: interrupted, any host failed, or ok.
 func outcome(ctx context.Context, results []runner.Result) error {
 	if ctx.Err() != nil {
-		return &exitCodeError{code: exitInterrupted, msg: "interrupted"}
+		return errInterrupted
 	}
 	failed := 0
 	for _, r := range results {

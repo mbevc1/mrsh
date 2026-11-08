@@ -188,9 +188,12 @@ const shellQuote = (s) => /^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replaceAll("'"
 // A user held in an env var or ARN is unresolved here, so it is left out;
 // passwords never appear (ssh takes none on the command line).
 function sshCommand(h, d) {
-  const user = h.user.kind !== "unset" ? h.user : d.user;
+  // Same order as the CLI: host, host's set, defaults, defaults' set.
+  const set = (name) => state.cfg.credentials.find((c) => c.name === name) || { user: { kind: "unset" }, identity_file: "" };
+  const sources = [h, set(h.credential), d, set(d.credential)];
+  const user = sources.map((x) => x.user).find((u) => u.kind !== "unset") || { kind: "unset" };
   const port = h.port || d.port || 22;
-  const identity = h.identity_file || d.identity_file;
+  const identity = sources.map((x) => x.identity_file).find(Boolean);
   const args = ["ssh"];
   if (port !== 22) args.push("-p", String(port));
   if (identity) args.push("-i", shellQuote(identity));
@@ -234,6 +237,7 @@ function render() {
   for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
   for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
 
+  renderCredentials(); // first: fills the credential dropdowns the editors read
   renderHosts();
   renderTests();
   renderUpgrades();
@@ -255,6 +259,11 @@ function statusBadge(name, results = state.tests) {
     span.title = r.detail; // the full message, e.g. with the address and wrapping context
   }
   return span;
+}
+
+function inherited(own, credential, cls) {
+  if (own) return cell(own, cls);
+  return cell(credential ? `set: ${credential}` : "default", "muted");
 }
 
 function statusCell(name, results = state.tests) {
@@ -381,8 +390,9 @@ function renderHosts() {
     tr.append(
       cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
-      cell(secretText(h.user) || "default", "ref"), cell(secretText(h.pass) || "default", "ref"),
-      cell(h.identity_file || "default", h.identity_file ? "ref" : "muted"),
+      // Unset fields come from the host's credential set (shown as "set: NAME"), else Defaults.
+      inherited(secretText(h.user), h.credential, "ref"), inherited(secretText(h.pass), h.credential, "ref"),
+      inherited(h.identity_file, h.credential, "ref"),
       statusCell(h.name),
     );
     const actions = document.createElement("td");
@@ -418,7 +428,10 @@ function setupSecret(fs) {
     value.placeholder = { plain: stored ? "(unchanged)" : "value", env: "VARIABLE_NAME",
       arn: "arn:aws:ssm:region:account:parameter/name" }[k] || "";
     hint.textContent = k === "plain" && stored ? "A literal is stored. Leave empty to keep it."
-      : k === "unset" ? (fs.closest("#defaults-form") ? "Not set: hosts rely on keys or the SSH agent." : "Falls back to defaults, then the SSH agent.") : "";
+      : k !== "unset" ? ""
+      : fs.closest("#defaults-form") ? "Not set: falls back to the Defaults credential set, then keys or the SSH agent."
+      : fs.closest("#cred-form") ? "Not set: hosts using this set fall back to Defaults."
+      : "Falls back to the credential set, then Defaults, then the SSH agent.";
   };
   kind.addEventListener("change", () => { value.value = ""; sync(); });
   fs.sync = sync;
@@ -442,7 +455,7 @@ function openEditor(h) {
   form.reset();
   $("#editor-title").textContent = h ? `Edit ${h.name}` : "Add host";
   const v = h || { name: "", host: "", group: "", port: 0, identity_file: "", known_hosts: "", user: { kind: "unset" }, pass: { kind: "unset" } };
-  for (const k of ["name", "host", "group", "identity_file", "known_hosts"]) form.elements[k].value = v[k] || "";
+  for (const k of ["name", "host", "group", "credential", "identity_file", "known_hosts"]) form.elements[k].value = v[k] || "";
   form.elements.port.value = v.port || "";
   fillSecret($('[data-secret="user"]', form), v.user);
   fillSecret($('[data-secret="pass"]', form), v.pass);
@@ -454,7 +467,7 @@ function openEditor(h) {
 function readHost() {
   const f = $("#host-form").elements;
   return {
-    name: f.name.value.trim(), host: f.host.value.trim(), group: f.group.value.trim(),
+    name: f.name.value.trim(), host: f.host.value.trim(), group: f.group.value.trim(), credential: f.credential.value,
     port: Number(f.port.value) || 0, identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(),
     user: readSecret($('#host-form [data-secret="user"]')), pass: readSecret($('#host-form [data-secret="pass"]')),
   };
@@ -510,7 +523,7 @@ async function removeHost(h, btn) {
 function renderDefaults() {
   const d = state.cfg.defaults, f = $("#defaults-form").elements;
   for (const k of ["port", "timeout", "parallel"]) f[k].value = d[k] || "";
-  for (const k of ["output", "host_key_policy", "identity_file", "known_hosts"]) f[k].value = d[k] || "";
+  for (const k of ["output", "host_key_policy", "credential", "identity_file", "known_hosts"]) f[k].value = d[k] || "";
   f.debug.checked = !!d.debug;
   fillSecret($('#defaults-form [data-secret="user"]'), d.user);
   fillSecret($('#defaults-form [data-secret="pass"]'), d.pass);
@@ -521,7 +534,7 @@ async function saveDefaults(ev) {
   const f = $("#defaults-form").elements;
   const body = {
     port: Number(f.port.value) || 0, timeout: Number(f.timeout.value) || 0, parallel: Number(f.parallel.value) || 0,
-    output: f.output.value, host_key_policy: f.host_key_policy.value, debug: f.debug.checked,
+    output: f.output.value, host_key_policy: f.host_key_policy.value, debug: f.debug.checked, credential: f.credential.value,
     identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(),
     user: readSecret($('#defaults-form [data-secret="user"]')), pass: readSecret($('#defaults-form [data-secret="pass"]')),
   };
@@ -533,6 +546,89 @@ async function saveDefaults(ev) {
       toast("Defaults saved");
     } catch (err) {
       if (!(await onConflict(err))) showErrors($("#defaults-errors"), err);
+    }
+  });
+}
+
+// Credential sets.
+function renderCredentials() {
+  const creds = state.cfg.credentials;
+  for (const sel of document.querySelectorAll(".cred-select")) {
+    const keep = sel.value;
+    const none = sel.options[0];
+    sel.replaceChildren(none, ...creds.map((c) => new Option(c.name, c.name)));
+    sel.value = creds.some((c) => c.name === keep) ? keep : "";
+  }
+  const tbody = $("#creds");
+  tbody.replaceChildren();
+  for (const c of creds) {
+    const tr = document.createElement("tr");
+    const used = c.used_by.length ? c.used_by.join(", ") : "unused";
+    tr.append(cell(c.name), cell(secretText(c.user) || "-", "ref"), cell(secretText(c.pass) || "-", "ref"),
+      cell(c.identity_file || "-", c.identity_file ? "ref" : "muted"), cell(used, c.used_by.length ? "" : "muted"));
+    const actions = document.createElement("td");
+    actions.className = "actions";
+    const edit = document.createElement("button");
+    edit.type = "button"; edit.className = "link"; edit.textContent = "Edit";
+    edit.addEventListener("click", () => openCredEditor(c));
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
+    if (c.used_by.length) { del.disabled = true; del.title = `Used by ${used}; point them at another set first`; }
+    del.addEventListener("click", () => removeCredential(c, del));
+    actions.append(edit, del);
+    tr.append(actions);
+    tbody.append(tr);
+  }
+  $("#cred-count").textContent = `${creds.length} set${creds.length === 1 ? "" : "s"}`;
+  $("#cred-empty").hidden = creds.length > 0;
+}
+
+function openCredEditor(c) {
+  state.editingCred = c ? c.name : null;
+  const form = $("#cred-form");
+  form.reset();
+  $("#cred-title").textContent = c ? `Edit credential ${c.name}` : "Add credential";
+  form.elements.name.value = c ? c.name : "";
+  form.elements.name.readOnly = !!c; // hosts reference sets by name
+  form.elements.identity_file.value = c ? c.identity_file : "";
+  fillSecret($('[data-secret="user"]', form), c ? c.user : { kind: "unset" });
+  fillSecret($('[data-secret="pass"]', form), c ? c.pass : { kind: "unset" });
+  $("#cred-errors").replaceChildren();
+  $("#cred-editor").showModal();
+  (c ? form.elements.identity_file : form.elements.name).focus();
+}
+
+async function saveCredential(ev) {
+  ev.preventDefault();
+  const f = $("#cred-form").elements;
+  const body = {
+    name: f.name.value.trim(), identity_file: f.identity_file.value.trim(),
+    user: readSecret($('#cred-form [data-secret="user"]')), pass: readSecret($('#cred-form [data-secret="pass"]')),
+  };
+  const editing = state.editingCred;
+  await busy($("#cred-save"), "Saving…", async () => {
+    try {
+      if (editing) await api("PUT", `/api/credentials/${encodeURIComponent(editing)}`, body);
+      else await api("POST", "/api/credentials", body);
+      $("#cred-editor").close();
+      await load();
+      toast(editing ? `Saved credential ${body.name}` : `Added credential ${body.name}`);
+    } catch (err) {
+      if (await onConflict(err)) { $("#cred-editor").close(); return; }
+      showErrors($("#cred-errors"), err);
+    }
+  });
+}
+
+async function removeCredential(c, btn) {
+  if (!confirm(`Remove credential ${c.name}?`)) return;
+  await busy(btn, "Removing…", async () => {
+    try {
+      await api("DELETE", `/api/credentials/${encodeURIComponent(c.name)}`);
+      await load();
+      toast(`Removed credential ${c.name}`);
+    } catch (err) {
+      if (!(await onConflict(err))) banner(`Could not remove ${c.name}: ${err.message}`);
     }
   });
 }
@@ -554,7 +650,7 @@ async function saveCommands(ev) {
 
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["hosts", "defaults", "commands", "test", "upgrade"]) $(`#tab-${t}`).hidden = t !== name;
+  for (const t of ["hosts", "credentials", "defaults", "commands", "test", "upgrade"]) $(`#tab-${t}`).hidden = t !== name;
 }
 
 let heartbeatTimer;
@@ -602,6 +698,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#commands-form").addEventListener("submit", saveCommands);
   $("#reload").addEventListener("click", reload);
   $("#exit").addEventListener("click", exitUI);
+  $("#cred-add").addEventListener("click", () => openCredEditor(null));
+  $("#cred-cancel").addEventListener("click", () => $("#cred-editor").close());
+  $("#cred-form").addEventListener("submit", saveCredential);
   $("#test-group").addEventListener("change", renderTests);
   $("#upgrade-group").addEventListener("change", renderUpgrades);
   $("#upgrade-all").addEventListener("change", (e) => {

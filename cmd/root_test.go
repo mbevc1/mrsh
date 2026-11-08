@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -90,5 +95,52 @@ func TestDebugLogging(t *testing.T) {
 	t.Setenv("MRSH_DEBUG", "1")
 	if !envDebug() {
 		t.Error("envDebug false with MRSH_DEBUG=1")
+	}
+}
+
+func TestExitCodeMapping(t *testing.T) {
+	for err, want := range map[error]int{
+		nil:                     0,
+		errors.New("bad flag"):  exitUsage,
+		errAborted:              exitUsage,
+		errInterrupted:          exitInterrupted,
+		&exitCodeError{code: 1}: exitHostFailed,
+		fmt.Errorf("load s3://b/k: %w", context.Canceled):            exitInterrupted,
+		fmt.Errorf("mutate: %w", &exitCodeError{code: 130, msg: ""}): exitInterrupted,
+	} {
+		if got := exitCode(err); got != want {
+			t.Errorf("exitCode(%v) = %d, want %d", err, got, want)
+		}
+	}
+}
+
+func TestConfirmPrompt(t *testing.T) {
+	ask := func(ctx context.Context, in io.Reader) error {
+		cmd := &cobra.Command{}
+		cmd.SetIn(in)
+		cmd.SetErr(io.Discard)
+		cmd.SetContext(ctx)
+		return confirm(cmd, "ok? ")
+	}
+	for in, want := range map[string]error{"y\n": nil, "YES\n": nil, "n\n": errAborted, "": errAborted} {
+		if err := ask(context.Background(), strings.NewReader(in)); !errors.Is(err, want) {
+			t.Errorf("answer %q: %v, want %v", in, err, want)
+		}
+	}
+
+	// Ctrl-C while the prompt waits ends it as interrupted, without input.
+	never, w := io.Pipe()
+	defer func() { _ = w.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	done := make(chan error, 1)
+	go func() { done <- ask(ctx, never) }()
+	select {
+	case err := <-done:
+		if exitCode(err) != exitInterrupted {
+			t.Errorf("interrupted prompt: %v (exit %d)", err, exitCode(err))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("prompt ignored the interrupt")
 	}
 }

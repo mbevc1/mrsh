@@ -20,6 +20,7 @@
 <div id="banner" class="banner" hidden></div>
 <nav class="tabs" role="tablist">
   <button type="button" role="tab" data-tab="hosts" aria-selected="true">Hosts</button>
+  <button type="button" role="tab" data-tab="credentials">Credentials</button>
   <button type="button" role="tab" data-tab="defaults">Defaults</button>
   <button type="button" role="tab" data-tab="commands">Commands</button>
   <button type="button" role="tab" data-tab="test">Test</button>
@@ -46,6 +47,21 @@
     <p class="empty" id="empty" hidden>No hosts yet. Add one, or run <code>mrsh hosts add</code>.</p>
   </section>
 
+  <section id="tab-credentials" hidden>
+    <p class="hint">Named sets of user, password and key that hosts (and Defaults) can reuse. A host's own user, password or key still wins over its set.</p>
+    <div class="toolbar">
+      <span class="count" id="cred-count"></span>
+      <button id="cred-add" type="button">Add credential</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>User</th><th>Pass</th><th>Identity</th><th>Used by</th><th></th></tr></thead>
+        <tbody id="creds"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="cred-empty" hidden>No credential sets yet. Add one, or run <code>mrsh credentials set</code>.</p>
+  </section>
+
   <section id="tab-defaults" hidden>
     <form id="defaults-form" class="grid-form">
       <label>Port <input name="port" type="number" min="0" max="65535"></label>
@@ -56,6 +72,9 @@
       </label>
       <label>Host key policy
         <select name="host_key_policy"><option value="">(built-in: insecure)</option><option>strict</option><option>accept-new</option><option>insecure</option></select>
+      </label>
+      <label class="wide">Credential set
+        <select name="credential" class="cred-select"><option value="">None</option></select>
       </label>
       <label class="wide">Identity file <input name="identity_file" placeholder="~/.ssh/id_ed25519"></label>
       <label class="wide">known_hosts <input name="known_hosts" placeholder="~/.ssh/known_hosts"></label>
@@ -118,6 +137,10 @@
     <label>Host <input name="host" required autocomplete="off" placeholder="10.0.0.1 or router.lan"></label>
     <label>Group <input name="group" list="groups" autocomplete="off"></label>
     <label>Port <input name="port" type="number" min="0" max="65535" placeholder="default"></label>
+    <label class="wide">Credential set
+      <select name="credential" class="cred-select"><option value="">None (use Defaults)</option></select>
+      <small class="secret-hint">User, password and key set below override the set's.</small>
+    </label>
     <label class="wide">Identity file <input name="identity_file" placeholder="default"></label>
     <label class="wide">known_hosts <input name="known_hosts" placeholder="default"></label>
     <fieldset class="wide secret" data-secret="user"></fieldset>
@@ -126,6 +149,20 @@
     <div class="actions wide">
       <button type="button" class="ghost" id="cancel">Cancel</button>
       <button type="submit" id="save">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="cred-editor">
+  <form id="cred-form" class="grid-form" method="dialog">
+    <h2 id="cred-title">Add credential</h2>
+    <label class="wide">Name <input name="name" required autocomplete="off" placeholder="routers"></label>
+    <label class="wide">Identity file <input name="identity_file" placeholder="not set"></label>
+    <fieldset class="wide secret" data-secret="user"></fieldset>
+    <fieldset class="wide secret" data-secret="pass"></fieldset>
+    <ul class="errors wide" id="cred-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="cred-cancel">Cancel</button>
+      <button type="submit" id="cred-save">Save</button>
     </div>
   </form>
 </dialog>

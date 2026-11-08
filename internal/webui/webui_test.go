@@ -545,3 +545,74 @@ func TestUpgradeRoutes(t *testing.T) {
 		t.Errorf("first apply: %d", code)
 	}
 }
+
+func TestCredentialRoutes(t *testing.T) {
+	f := newFixture(t)
+	mut := func(method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
+		t.Helper()
+		return f.do(method, path, body, header("If-Match", f.version()))
+	}
+
+	if w, _ := mut("POST", "/api/credentials", `{"name":"lab","identity_file":"~/.ssh/lab","user":{"kind":"plain","value":"admin"},"pass":{"kind":"plain","value":"s3cret-set"}}`); w.Code != 200 {
+		t.Fatalf("add: %d %s", w.Code, w.Body)
+	}
+	if w, out := mut("POST", "/api/credentials", `{"name":"lab","user":{"kind":"plain","value":"x"}}`); w.Code != 422 || !strings.Contains(fmt.Sprint(out["errors"]), "already exists") {
+		t.Errorf("duplicate: %d %v", w.Code, out)
+	}
+	if w, _ := mut("POST", "/api/credentials", `{"name":"empty"}`); w.Code != 422 {
+		t.Errorf("empty set: %d %s", w.Code, w.Body)
+	}
+
+	// The set's literal password never reaches the browser.
+	w, _ := f.do("GET", "/api/config", "")
+	if strings.Contains(w.Body.String(), "s3cret-set") {
+		t.Fatal("credential password leaked")
+	}
+	var view ConfigView
+	_ = json.Unmarshal(w.Body.Bytes(), &view)
+	if len(view.Credentials) != 1 || view.Credentials[0].User.Value != "admin" || !view.Credentials[0].Pass.Set || len(view.Credentials[0].UsedBy) != 0 {
+		t.Fatalf("view = %+v", view.Credentials)
+	}
+
+	// Point a host and the defaults at it.
+	if w, _ := mut("PUT", "/api/hosts/web01", `{"name":"web01","host":"10.0.0.1","group":"web","credential":"lab","user":{"kind":"unset"},"pass":{"kind":"unset"}}`); w.Code != 200 {
+		t.Fatalf("host: %d %s", w.Code, w.Body)
+	}
+	if w, _ := mut("PUT", "/api/defaults", `{"credential":"lab","user":{"kind":"unset"},"pass":{"kind":"unset"}}`); w.Code != 200 {
+		t.Fatalf("defaults: %d %s", w.Code, w.Body)
+	}
+	if w, _ := mut("PUT", "/api/hosts/web01", `{"name":"web01","host":"10.0.0.1","credential":"nope","user":{"kind":"unset"},"pass":{"kind":"unset"}}`); w.Code != 422 {
+		t.Errorf("unknown set: %d", w.Code)
+	}
+
+	// Editing keeps the stored password when it is left empty; renaming is refused.
+	if w, _ := mut("PUT", "/api/credentials/lab", `{"name":"lab","identity_file":"","user":{"kind":"env","value":"LAB_USER"},"pass":{"kind":"plain","value":""}}`); w.Code != 200 {
+		t.Fatalf("edit: %d %s", w.Code, w.Body)
+	}
+	c := f.config()
+	if set := c.Credentials["lab"]; set.UserEnv != "LAB_USER" || set.Pass != "s3cret-set" || set.IdentityFile != "" {
+		t.Errorf("after edit: %+v", set)
+	}
+	if c.Hosts[0].Credential != "lab" || c.Defaults.Credential != "lab" {
+		t.Errorf("references: host=%q defaults=%q", c.Hosts[0].Credential, c.Defaults.Credential)
+	}
+	if w, _ := mut("PUT", "/api/credentials/lab", `{"name":"renamed","user":{"kind":"plain","value":"a"}}`); w.Code != 422 {
+		t.Errorf("rename: %d", w.Code)
+	}
+	if w, _ := mut("PUT", "/api/credentials/ghost", `{"name":"ghost","user":{"kind":"plain","value":"a"}}`); w.Code != 404 {
+		t.Errorf("edit missing: %d", w.Code)
+	}
+
+	// In use: delete refused, naming the users; then allowed once unused.
+	if w, out := mut("DELETE", "/api/credentials/lab", ""); w.Code != 422 || !strings.Contains(fmt.Sprint(out["errors"]), "used by defaults, web01") {
+		t.Errorf("delete in use: %d %v", w.Code, out)
+	}
+	mut("PUT", "/api/hosts/web01", `{"name":"web01","host":"10.0.0.1","user":{"kind":"unset"},"pass":{"kind":"unset"}}`)
+	mut("PUT", "/api/defaults", `{"user":{"kind":"unset"},"pass":{"kind":"unset"}}`)
+	if w, _ := mut("DELETE", "/api/credentials/lab", ""); w.Code != 200 {
+		t.Errorf("delete: %d %s", w.Code, w.Body)
+	}
+	if w, _ := mut("DELETE", "/api/credentials/lab", ""); w.Code != 404 {
+		t.Errorf("delete missing: %d", w.Code)
+	}
+}

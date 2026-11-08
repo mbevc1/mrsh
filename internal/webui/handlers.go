@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,10 +32,21 @@ type HostView struct {
 	Host         string `json:"host"`
 	Group        string `json:"group"`
 	Port         int    `json:"port"`
+	Credential   string `json:"credential"`
 	IdentityFile string `json:"identity_file"`
 	KnownHosts   string `json:"known_hosts"`
 	User         Secret `json:"user"`
 	Pass         Secret `json:"pass"`
+}
+
+// CredentialView is one credential set in the API; UsedBy lists the hosts
+// (and "defaults") that reference it.
+type CredentialView struct {
+	Name         string   `json:"name"`
+	IdentityFile string   `json:"identity_file"`
+	User         Secret   `json:"user"`
+	Pass         Secret   `json:"pass"`
+	UsedBy       []string `json:"used_by"`
 }
 
 // DefaultsView is the defaults block in the API.
@@ -47,18 +59,20 @@ type DefaultsView struct {
 	IdentityFile  string `json:"identity_file"`
 	KnownHosts    string `json:"known_hosts"`
 	HostKeyPolicy string `json:"host_key_policy"`
+	Credential    string `json:"credential"`
 	User          Secret `json:"user"`
 	Pass          Secret `json:"pass"`
 }
 
 // ConfigView is GET /api/config.
 type ConfigView struct {
-	Version  string       `json:"version"`
-	Location string       `json:"location"`
-	Defaults DefaultsView `json:"defaults"`
-	Commands []string     `json:"commands"`
-	Hosts    []HostView   `json:"hosts"`
-	Groups   []string     `json:"groups"`
+	Version     string           `json:"version"`
+	Location    string           `json:"location"`
+	Defaults    DefaultsView     `json:"defaults"`
+	Credentials []CredentialView `json:"credentials"`
+	Commands    []string         `json:"commands"`
+	Hosts       []HostView       `json:"hosts"`
+	Groups      []string         `json:"groups"`
 }
 
 func toSecret(r config.SecretRef) Secret {
@@ -123,9 +137,15 @@ func (v HostView) toHost(old config.Host) (config.Host, error) {
 	creds, err := applyCredentials(v.User, v.Pass, old.Credentials)
 	return config.Host{
 		Name: strings.TrimSpace(v.Name), Host: strings.TrimSpace(v.Host), Group: strings.TrimSpace(v.Group),
-		Port: v.Port, IdentityFile: strings.TrimSpace(v.IdentityFile), KnownHosts: strings.TrimSpace(v.KnownHosts),
+		Port: v.Port, Credential: strings.TrimSpace(v.Credential),
+		IdentityFile: strings.TrimSpace(v.IdentityFile), KnownHosts: strings.TrimSpace(v.KnownHosts),
 		Credentials: creds,
 	}, err
+}
+
+func (v CredentialView) toSet(old config.CredentialSet) (config.CredentialSet, error) {
+	creds, err := applyCredentials(v.User, v.Pass, old.Credentials)
+	return config.CredentialSet{Credentials: creds, IdentityFile: strings.TrimSpace(v.IdentityFile)}, err
 }
 
 func viewOf(cfg *config.Config, version, location string) ConfigView {
@@ -135,9 +155,26 @@ func viewOf(cfg *config.Config, version, location string) ConfigView {
 		Defaults: DefaultsView{
 			Port: d.Port, Timeout: d.Timeout, Parallel: d.Parallel, Output: d.Output, Debug: d.Debug,
 			IdentityFile: d.IdentityFile, KnownHosts: d.KnownHosts, HostKeyPolicy: d.HostKeyPolicy,
-			User: toSecret(d.UserRef()), Pass: toSecret(d.PassRef()),
+			Credential: d.Credential, User: toSecret(d.UserRef()), Pass: toSecret(d.PassRef()),
 		},
-		Hosts: make([]HostView, 0, len(cfg.Hosts)), Groups: []string{},
+		Credentials: []CredentialView{},
+		Hosts:       make([]HostView, 0, len(cfg.Hosts)), Groups: []string{},
+	}
+	names := make([]string, 0, len(cfg.Credentials))
+	for name := range cfg.Credentials {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		set := cfg.Credentials[name]
+		used := cfg.CredentialUsers(name)
+		if used == nil {
+			used = []string{}
+		}
+		out.Credentials = append(out.Credentials, CredentialView{
+			Name: name, IdentityFile: set.IdentityFile, UsedBy: used,
+			User: toSecret(set.UserRef()), Pass: toSecret(set.PassRef()),
+		})
 	}
 	if out.Commands == nil {
 		out.Commands = []string{}
@@ -145,7 +182,7 @@ func viewOf(cfg *config.Config, version, location string) ConfigView {
 	seen := map[string]bool{}
 	for _, h := range cfg.Hosts {
 		out.Hosts = append(out.Hosts, HostView{
-			Name: h.Name, Host: h.Host, Group: h.Group, Port: h.Port,
+			Name: h.Name, Host: h.Host, Group: h.Group, Port: h.Port, Credential: h.Credential,
 			IdentityFile: h.IdentityFile, KnownHosts: h.KnownHosts,
 			User: toSecret(h.UserRef()), Pass: toSecret(h.PassRef()),
 		})
@@ -220,10 +257,55 @@ func (s *Server) routes(mux *http.ServeMux) {
 			return &config.ValidationError{Err: err}
 		}
 		return d.SetDefaults(config.Defaults{
-			Credentials: creds, Port: v.Port, Timeout: v.Timeout, Parallel: v.Parallel,
+			Credential: strings.TrimSpace(v.Credential), Credentials: creds, Port: v.Port, Timeout: v.Timeout, Parallel: v.Parallel,
 			Output: v.Output, Debug: v.Debug, IdentityFile: strings.TrimSpace(v.IdentityFile),
 			KnownHosts: strings.TrimSpace(v.KnownHosts), HostKeyPolicy: v.HostKeyPolicy,
 		})
+	}))
+	mux.HandleFunc("POST /api/credentials", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
+		var v CredentialView
+		if err := decode(r, &v); err != nil {
+			return err
+		}
+		v.Name = strings.TrimSpace(v.Name)
+		if v.Name == "" {
+			return &config.ValidationError{Err: errors.New("credential: name is required")}
+		}
+		if _, taken := cfg.Credentials[v.Name]; taken {
+			return &config.ValidationError{Err: fmt.Errorf("credential %s already exists", v.Name)}
+		}
+		set, err := v.toSet(config.CredentialSet{})
+		if err != nil {
+			return &config.ValidationError{Err: err}
+		}
+		return d.SetCredential(v.Name, set)
+	}))
+	// Renaming is not supported: hosts reference sets by name.
+	mux.HandleFunc("PUT /api/credentials/{name}", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
+		name := r.PathValue("name")
+		old, ok := cfg.Credentials[name]
+		if !ok {
+			return fmt.Errorf("%w: %s", config.ErrCredentialNotFound, name)
+		}
+		var v CredentialView
+		if err := decode(r, &v); err != nil {
+			return err
+		}
+		if n := strings.TrimSpace(v.Name); n != "" && n != name {
+			return &config.ValidationError{Err: errors.New("credential: renaming is not supported; add a new set and point hosts at it")}
+		}
+		set, err := v.toSet(old)
+		if err != nil {
+			return &config.ValidationError{Err: err}
+		}
+		return d.SetCredential(name, set)
+	}))
+	mux.HandleFunc("DELETE /api/credentials/{name}", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
+		name := r.PathValue("name")
+		if used := cfg.CredentialUsers(name); len(used) > 0 {
+			return &config.ValidationError{Err: fmt.Errorf("credential %s is used by %s; point them at another set first", name, strings.Join(used, ", "))}
+		}
+		return d.RemoveCredential(name)
 	}))
 	mux.HandleFunc("PUT /api/commands", s.mutate(func(r *http.Request, d *config.Document, _ *config.Config) error {
 		var cmds []string
@@ -330,7 +412,7 @@ func (s *Server) mutate(fn func(*http.Request, *config.Document, *config.Config)
 		case errors.As(err, &ve):
 			status = http.StatusUnprocessableEntity
 			writeJSON(w, status, map[string]any{"error": "validation failed", "errors": ve.Problems()})
-		case errors.Is(err, config.ErrHostNotFound):
+		case errors.Is(err, config.ErrHostNotFound), errors.Is(err, config.ErrCredentialNotFound):
 			status = http.StatusNotFound
 			writeError(w, status, err.Error())
 		case errors.Is(err, config.ErrHostExists):

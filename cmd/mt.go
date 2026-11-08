@@ -216,10 +216,7 @@ func confirmTargets(cmd *cobra.Command, action string, targets []runner.Target) 
 	for _, t := range targets {
 		_, _ = fmt.Fprintf(w, "  %s (%s)\n", t.Name, net.JoinHostPort(t.Host.Host, strconv.Itoa(t.Port)))
 	}
-	if !askYesNo(cmd, "Continue? [y/N]: ") {
-		return errors.New("aborted")
-	}
-	return nil
+	return confirm(cmd, "Continue? [y/N]: ")
 }
 
 func newMtRebootCmd(opts *globalOptions) *cobra.Command {

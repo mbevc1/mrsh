@@ -31,12 +31,22 @@ defaults:
 # commands:
 #   - uptime
 
+# Reusable logins: hosts (or defaults) use one with 'credential: NAME', and
+# a host's own user, pass or identity_file still wins over the set's.
+# credentials:
+#   routers:
+#     user: admin
+#     pass_env: ROUTERS_PASS
+
 hosts: []
 # Set at most one of pass, pass_env or pass_arn per host (same for user):
 #  - name: web01
 #    host: 10.0.0.1
 #    group: web
 #    pass_env: WEB01_PASS
+#  - name: rb01
+#    host: 10.0.0.254
+#    credential: routers
 `
 
 func newHostsCmd(opts *globalOptions) *cobra.Command {
@@ -103,6 +113,7 @@ type hostRow struct {
 	Host         string `json:"host"`
 	Port         int    `json:"port"`
 	Group        string `json:"group"`
+	Credential   string `json:"credential"`
 	User         string `json:"user"`
 	Pass         string `json:"pass"`
 	IdentityFile string `json:"identity_file"`
@@ -127,7 +138,7 @@ func newHostsListCmd(opts *globalOptions) *cobra.Command {
 			for _, h := range hosts {
 				e := lc.cfg.Effective(h)
 				rows = append(rows, hostRow{
-					Name: e.Name, Host: e.Host, Port: e.Port, Group: e.Group,
+					Name: e.Name, Host: e.Host, Port: e.Port, Group: e.Group, Credential: e.Credential,
 					User:         e.UserRef().Display(true), // usernames are not secret
 					Pass:         e.PassRef().Display(showSecrets),
 					IdentityFile: e.IdentityFile,
@@ -148,17 +159,17 @@ func writeHostRows(w io.Writer, format string, rows []hostRow) error {
 		return enc.Encode(rows)
 	case "text", "full": // already complete, so full is the same table
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "NAME\tHOST\tPORT\tGROUP\tUSER\tPASS\tIDENTITY")
+		_, _ = fmt.Fprintln(tw, "NAME\tHOST\tPORT\tGROUP\tCREDENTIAL\tUSER\tPASS\tIDENTITY")
 		for _, r := range rows {
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				r.Name, r.Host, strconv.Itoa(r.Port), dash(r.Group), dash(r.User), dash(r.Pass), dash(r.IdentityFile))
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				r.Name, r.Host, strconv.Itoa(r.Port), dash(r.Group), dash(r.Credential), dash(r.User), dash(r.Pass), dash(r.IdentityFile))
 		}
 		return tw.Flush()
 	case "csv":
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"name", "host", "port", "group", "user", "pass", "identity_file"})
+		_ = cw.Write([]string{"name", "host", "port", "group", "credential", "user", "pass", "identity_file"})
 		for _, r := range rows {
-			_ = cw.Write([]string{r.Name, r.Host, strconv.Itoa(r.Port), r.Group, r.User, r.Pass, r.IdentityFile})
+			_ = cw.Write([]string{r.Name, r.Host, strconv.Itoa(r.Port), r.Group, r.Credential, r.User, r.Pass, r.IdentityFile})
 		}
 		cw.Flush()
 		return cw.Error()

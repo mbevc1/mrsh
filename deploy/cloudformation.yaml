@@ -13,9 +13,11 @@ Metadata:
       - Label: { default: Network (must reach the managed hosts) }
         Parameters: [SubnetIds, SecurityGroupIds, AssignPublicIp]
       - Label: { default: Data and secrets mrsh may access }
-        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
+        Parameters: [ConfigBucket, ConfigKey, BackupBucket, BackupPrefix, CreateBackupBucket, BackupRetentionDays, VersionRetentionDays, SsmParameterPrefix, SecretsManagerPrefix, KmsKeyArn]
       - Label: { default: Sizing and logs }
         Parameters: [TaskCpu, TaskMemory, LogRetentionDays]
+      - Label: { default: Notifications }
+        Parameters: [NotificationEmail]
 
 Parameters:
   ImageUri:
@@ -42,15 +44,17 @@ Parameters:
     AllowedValues: [ENABLED, DISABLED]
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets with a route to the managed hosts and to S3/SSM/Secrets Manager (NAT or VPC endpoints).
+    Description: >-
+      Public subnets (internet gateway route) that also reach the managed hosts, e.g. over VPN/TGW routes
+      or the hosts' public IPs. With AssignPublicIp=DISABLED, use private subnets with NAT or VPC endpoints.
   SecurityGroupIds:
     Type: List<AWS::EC2::SecurityGroup::Id>
-    Description: Must allow outbound SSH to the hosts and HTTPS to AWS APIs.
+    Description: Needs no inbound rules; allow outbound SSH to the hosts and HTTPS to AWS APIs and the registry.
   AssignPublicIp:
     Type: String
-    Default: DISABLED
-    AllowedValues: [DISABLED, ENABLED]
-    Description: ENABLED only for public subnets without NAT.
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: ENABLED gives the task a public IP in a public subnet, so no NAT gateway is needed (the cheapest setup).
   ConfigBucket:
     Type: String
     AllowedPattern: "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"
@@ -64,6 +68,25 @@ Parameters:
   BackupPrefix:
     Type: String
     Default: mrsh/backups/
+  CreateBackupBucket:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true creates BackupBucket (private, SSE-S3, TLS only, versioned, retained on stack deletion) with
+      expiry rules. Keep the config (ConfigKey) in it too, outside BackupPrefix, to get its edit history.
+  BackupRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to keep objects under BackupPrefix when CreateBackupBucket=true (keep the config outside that prefix).
+  VersionRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: >-
+      Days to keep overwritten or deleted versions (previous config edits, expired backups) when
+      CreateBackupBucket=true. Roll back a bad config edit by restoring a previous version.
   SsmParameterPrefix:
     Type: String
     Default: ""
@@ -84,6 +107,12 @@ Parameters:
     Type: String
     Default: "512"
     Description: MiB; must be valid for TaskCpu (256 CPU allows 512-2048).
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email for failure alerts (non-zero exit, task failed to start, schedule could not launch).
+      Empty for none. Confirm the SNS subscription email once.
   LogRetentionDays:
     Type: Number
     Default: 30
@@ -91,9 +120,11 @@ Parameters:
 
 Conditions:
   HasBackups: !Not [!Equals [!Ref BackupBucket, ""]]
+  CreateBucket: !And [!Condition HasBackups, !Equals [!Ref CreateBackupBucket, "true"]]
   HasSsm: !Not [!Equals [!Ref SsmParameterPrefix, ""]]
   HasSecrets: !Not [!Equals [!Ref SecretsManagerPrefix, ""]]
   HasKms: !Not [!Equals [!Ref KmsKeyArn, ""]]
+  HasNotify: !Not [!Equals [!Ref NotificationEmail, ""]]
 
 Resources:
   LogGroup:
@@ -103,6 +134,62 @@ Resources:
     Properties:
       LogGroupName: !Sub /mrsh/${AWS::StackName}
       RetentionInDays: !Ref LogRetentionDays
+
+  BackupBucketResource:
+    Type: AWS::S3::Bucket
+    Condition: CreateBucket
+    DeletionPolicy: Retain # backups outlive the stack
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BackupBucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # Every config save keeps the previous copy, so a bad edit can be rolled back.
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-backups
+            Status: Enabled
+            Prefix: !Ref BackupPrefix
+            ExpirationInDays: !Ref BackupRetentionDays
+          - Id: expire-old-versions # previous config edits and expired backups
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: !Ref VersionRetentionDays }
+          - Id: remove-expired-delete-markers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateBucket
+    Properties:
+      Bucket: !Ref BackupBucketResource
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TLSOnly
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt BackupBucketResource.Arn
+              - !Sub ${BackupBucketResource.Arn}/*
+            Condition:
+              Bool: { aws:SecureTransport: "false" }
 
   # What mrsh itself may touch, attached to the task role.
   AppPolicy:
@@ -257,6 +344,12 @@ Resources:
                 Resource: [!GetAtt TaskExecutionRole.Arn, !GetAtt TaskRole.Arn]
                 Condition:
                   StringEquals: { iam:PassedToService: ecs-tasks.amazonaws.com }
+              - !If
+                - HasNotify
+                - Effect: Allow
+                  Action: sqs:SendMessage
+                  Resource: !GetAtt ScheduleDLQ.Arn
+                - !Ref AWS::NoValue
 
   Schedule:
     Type: AWS::Scheduler::Schedule
@@ -281,8 +374,112 @@ Resources:
               AssignPublicIp: !Ref AssignPublicIp
         RetryPolicy:
           MaximumRetryAttempts: 0 # a failed reboot or upgrade must not be replayed
+        DeadLetterConfig: !If [HasNotify, { Arn: !GetAtt ScheduleDLQ.Arn }, !Ref AWS::NoValue]
+
+  # ---- Failure notifications (only with NotificationEmail) ----------------
+
+  NotificationTopic: # unencrypted: EventBridge cannot publish with the aws/sns key; messages hold no secrets
+    Type: AWS::SNS::Topic
+    Condition: HasNotify
+    Properties:
+      DisplayName: !Sub mrsh ${AWS::StackName}
+
+  NotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotify
+    Properties:
+      TopicArn: !Ref NotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  NotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: HasNotify
+    Properties:
+      Topics: [!Ref NotificationTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TaskFailedRule
+            Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref NotificationTopic
+            Condition:
+              ArnEquals: { aws:SourceArn: !GetAtt TaskFailedRule.Arn }
+          - Sid: ScheduleFailedAlarm
+            Effect: Allow
+            Principal: { Service: cloudwatch.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref NotificationTopic
+            Condition:
+              ArnEquals: { aws:SourceArn: !GetAtt ScheduleFailedAlarm.Arn }
+
+  # A stopped task with a non-zero exit (1: a host failed, 2: usage or
+  # config error), or one that never started (image pull, ENI, secrets).
+  TaskFailedRule:
+    Type: AWS::Events::Rule
+    Condition: HasNotify
+    Properties:
+      Description: !Sub mrsh task failures for ${AWS::StackName}
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: [STOPPED]
+          $or:
+            - containers:
+                exitCode: [{ anything-but: 0 }]
+            - stopCode: [TaskFailedToStart]
+      Targets:
+        - Id: email
+          Arn: !Ref NotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              task: $.detail.taskArn
+              exit: $.detail.containers[0].exitCode
+              reason: $.detail.stoppedReason
+            InputTemplate: !Sub |
+              "mrsh run failed in stack ${AWS::StackName}."
+              "Exit code: <exit> (1 = a host failed, 2 = usage or config error; empty = the task did not start)."
+              "Reason: <reason>"
+              "Task: <task>"
+              "Logs: CloudWatch log group ${LogGroup}, stream prefix mrsh/mrsh/"
+
+  # Runs the scheduler could not launch land here instead of vanishing.
+  ScheduleDLQ:
+    Type: AWS::SQS::Queue
+    Condition: HasNotify
+    Properties:
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+
+  ScheduleFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasNotify
+    Properties:
+      AlarmDescription: !Sub mrsh schedule for ${AWS::StackName} could not start a task; see the ${ScheduleDLQ.QueueName} queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ScheduleDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref NotificationTopic]
 
 Outputs:
+  NotificationTopicArn:
+    Condition: HasNotify
+    Value: !Ref NotificationTopic
+  BackupBucketName:
+    Condition: CreateBucket
+    Value: !Ref BackupBucketResource
   LogGroupName:
     Value: !Ref LogGroup
   ScheduleArn:

@@ -114,6 +114,10 @@ func (s *LocalStore) Save(_ context.Context, raw []byte, ifVersion string) error
 		if ifVersion != "" {
 			return ErrVersionConflict
 		}
+		// A new config may hold secrets, so new folders are private too.
+		if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
+			return err
+		}
 	case err != nil:
 		return err
 	default:

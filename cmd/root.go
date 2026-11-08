@@ -19,7 +19,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// globalOptions holds the persistent flags shared by every subcommand.
 type globalOptions struct {
 	config       string
 	group        string
@@ -119,11 +118,26 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 
 	root.SetGlobalNormalizationFunc(normalizeFlagName)
 
-	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts))
+	// The version text contains no "{{", so it works as a template verbatim.
+	info := currentVersionInfo()
+	root.Version = info.Version
+	root.SetVersionTemplate(versionText(info))
+	root.Flags().BoolP("version", "v", false, "print version and build info (same as 'mrsh version')")
+
+	root.CompletionOptions.DisableDefaultCmd = true // replaced by newCompletionCmd
+	root.AddCommand(newVersionCmd(opts), newHostsCmd(opts), newRunCmd(opts), newMtCmd(opts), newUICmd(opts), newCompletionCmd())
+	for flag, fn := range map[string]cobra.CompletionFunc{
+		"host":            completeHostNames(opts),
+		"group":           completeGroups(opts),
+		"output":          fixedValues(validOutputs...),
+		"host-key-policy": fixedValues(config.HostKeyStrict, config.HostKeyAcceptNew, config.HostKeyInsecure),
+		"sse":             fixedValues("AES256", "aws:kms"),
+	} {
+		_ = root.RegisterFlagCompletionFunc(flag, fn)
+	}
 	return root, opts
 }
 
-// flagAliases maps alternate flag spellings to their canonical name.
 var flagAliases = map[string]string{"hosts": "host"}
 
 func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
@@ -133,8 +147,7 @@ func normalizeFlagName(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	return pflag.NormalizedName(name)
 }
 
-// setupLogging installs a text slog handler on w: Debug when enabled, else Warn.
-// Logs go to stderr so stdout stays clean for --output json|csv.
+// setupLogging logs to w (stderr) so stdout stays clean for --output json|csv.
 func setupLogging(w io.Writer, debug bool) {
 	level := slog.LevelWarn
 	if debug {

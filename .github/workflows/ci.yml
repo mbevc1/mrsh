@@ -21,7 +21,7 @@ jobs:
       - run: make vet
       - run: make test
       - run: make build
-      - run: ./bin/mrsh version --output json
+      - run: ./mrsh version --output json
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest

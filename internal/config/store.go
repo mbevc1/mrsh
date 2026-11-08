@@ -15,19 +15,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/gofrs/flock"
 
 	"github.com/mbevc1/mrsh/internal/s3client"
 )
-
-// lockRetry is how often Save retries a held lock until ctx expires.
-const lockRetry = 20 * time.Millisecond
 
 var (
 	// ErrVersionConflict means the config changed since it was loaded (or
@@ -89,9 +84,10 @@ func NewStore(uri string, opts StoreOptions) (ConfigStore, error) {
 
 func isLetter(b byte) bool { return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') }
 
-// LocalStore keeps the config in a local file. The version is the SHA-256 of
-// the content; Save compares it under an exclusive lock on "<path>.lock", so
-// concurrent writers (CLI and UI) cannot silently clobber each other.
+// LocalStore keeps the config in a local file, versioned by the SHA-256 of
+// its content: Save refuses when the file changed since it was loaded.
+// Saves within one process are serialized per path; saves from two
+// processes in the same few microseconds are not.
 type LocalStore struct {
 	Path string
 }
@@ -106,12 +102,10 @@ func (s *LocalStore) Load(_ context.Context) ([]byte, string, error) {
 	return raw, digest(raw), nil
 }
 
-func (s *LocalStore) Save(ctx context.Context, raw []byte, ifVersion string) error {
-	lock := flock.New(s.Path + ".lock")
-	if _, err := lock.TryLockContext(ctx, lockRetry); err != nil {
-		return fmt.Errorf("lock %s: %w", s.Path, err)
-	}
-	defer func() { _ = lock.Unlock() }()
+func (s *LocalStore) Save(_ context.Context, raw []byte, ifVersion string) error {
+	mu := pathMutex(s.Path)
+	mu.Lock()
+	defer mu.Unlock()
 
 	mode := fs.FileMode(0o600)
 	cur, err := os.ReadFile(s.Path)
@@ -131,6 +125,17 @@ func (s *LocalStore) Save(ctx context.Context, raw []byte, ifVersion string) err
 		}
 	}
 	return writeAtomic(s.Path, raw, mode)
+}
+
+var saveMutexes sync.Map // absolute path -> *sync.Mutex
+
+func pathMutex(path string) *sync.Mutex {
+	key, err := filepath.Abs(path)
+	if err != nil {
+		key = filepath.Clean(path)
+	}
+	mu, _ := saveMutexes.LoadOrStore(key, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 // writeAtomic writes via a temp file in the same directory, then renames.

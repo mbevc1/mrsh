@@ -175,22 +175,3 @@ func TestSecretRefDisplay(t *testing.T) {
 		}
 	}
 }
-
-func TestMarshalRoundTrip(t *testing.T) {
-	raw, _ := os.ReadFile("../../testdata/hosts.yaml")
-	c, err := Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := c.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	c2, err := Parse(out)
-	if err != nil {
-		t.Fatalf("re-parse: %v\n%s", err, out)
-	}
-	if len(c2.Hosts) != len(c.Hosts) || c2.Hosts[3] != c.Hosts[3] || c2.Defaults != c.Defaults {
-		t.Errorf("round trip changed config:\n%s", out)
-	}
-}

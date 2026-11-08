@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -85,9 +86,10 @@ func currentVersionInfo() versionInfo {
 
 func newVersionCmd(opts *globalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Show mrsh build info",
-		Args:  cobra.NoArgs,
+		Use:     "version",
+		Aliases: []string{"v", "ver"},
+		Short:   "Show mrsh build info",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := currentVersionInfo()
 			out := cmd.OutOrStdout()
@@ -95,16 +97,21 @@ func newVersionCmd(opts *globalOptions) *cobra.Command {
 			case "json":
 				return json.NewEncoder(out).Encode(info)
 			case "text":
-				_, err := fmt.Fprintf(out,
-					"%s %s\n  commit:  %s\n  built:   %s\n  by:      %s\n  go:      %s\n  os/arch: %s/%s\n",
-					info.Name, info.Version, orUnknown(info.Commit), orUnknown(info.Date),
-					orUnknown(info.BuiltBy), info.Go, info.OS, info.Arch)
+				_, err := io.WriteString(out, versionText(info))
 				return err
 			default:
 				return fmt.Errorf("version does not support --output %s", opts.output)
 			}
 		},
 	}
+}
+
+// versionText is the human-readable block shared by `mrsh version` and
+// `mrsh -v/--version`.
+func versionText(info versionInfo) string {
+	return fmt.Sprintf("%s %s\n  commit:  %s\n  built:   %s\n  by:      %s\n  go:      %s\n  os/arch: %s/%s\n",
+		info.Name, info.Version, orUnknown(info.Commit), orUnknown(info.Date),
+		orUnknown(info.BuiltBy), info.Go, info.OS, info.Arch)
 }
 
 func orUnknown(s string) string {

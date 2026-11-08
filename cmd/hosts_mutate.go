@@ -11,7 +11,6 @@ import (
 	"github.com/mbevc1/mrsh/internal/config"
 )
 
-// sharedFlagsHelp explains the reused global flags in add/update help.
 const sharedFlagsHelp = "The address, group, user and identity file come from the global flags:\n" +
 	"  -H/--host ADDRESS, -g/--group GROUP, -u/--user USER, -i/--identity-file PATH.\n" +
 	"Set at most one of --user/--user-env/--user-arn and of --pass/--pass-env/--pass-arn."
@@ -181,6 +180,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	f.register(cmd)
+	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
 
@@ -220,6 +220,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "host name to remove")
 	cmd.Flags().BoolVar(&confirm, "confirm", false, "skip the confirmation prompt")
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
 

@@ -1,0 +1,152 @@
+package cmd
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"strings"
+	"sync"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
+	"github.com/mbevc1/mrsh/internal/config"
+	"github.com/mbevc1/mrsh/internal/s3client"
+)
+
+func (o *globalOptions) sse() s3client.SSE { return s3client.SSE{Mode: o.sseMode, KMSKey: o.kmsKey} }
+
+// openStore opens the --config source, applying --sse/--kms-key to S3 saves.
+func openStore(opts *globalOptions) (config.ConfigStore, error) {
+	sse := opts.sse()
+	if err := sse.Validate(); err != nil {
+		return nil, err
+	}
+	return config.NewStore(opts.config, config.StoreOptions{SSE: sse})
+}
+
+type loadedConfig struct {
+	cfg     *config.Config
+	raw     []byte // the file as loaded, comments and all
+	store   config.ConfigStore
+	version string
+}
+
+// loadConfig loads, parses and validates the --config source, then applies
+// the precedence CLI flag > MRSH_DEBUG > hosts.yaml defaults > built-in
+// default to the global options.
+func loadConfig(cmd *cobra.Command, opts *globalOptions) (*loadedConfig, error) {
+	store, err := openStore(opts)
+	if err != nil {
+		return nil, err
+	}
+	raw, version, err := store.Load(cmd.Context())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("config %s not found (create one with 'mrsh hosts init -f %s')", store.Location(), opts.config)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load config %s: %w", store.Location(), err)
+	}
+	cfg, err := config.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", store.Location(), err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config %s:\n%w", store.Location(), err)
+	}
+	if err := applyDefaults(cmd, opts, raw); err != nil {
+		return nil, err
+	}
+	// The resolved flag-or-defaults value becomes the default every host
+	// inherits; a per-host known_hosts still wins.
+	cfg.Defaults.KnownHosts = opts.knownHosts
+	opts.hostKeyPolicySet = cmd.Flags().Changed("host-key-policy") || cfg.Defaults.HostKeyPolicy != ""
+	warnLiteralPasswords(cfg, store.Location(), version)
+	slog.Debug("config loaded", "path", store.Location(), "source", sourceKind(opts.config),
+		"hosts", len(cfg.Hosts), "parallel", opts.parallel, "timeout", opts.timeout, "output", opts.output)
+	return &loadedConfig{cfg: cfg, raw: raw, store: store, version: version}, nil
+}
+
+var defaultBindings = map[string]string{
+	"defaults.parallel": "parallel",
+	"defaults.timeout":  "timeout",
+	"defaults.output":   "output",
+	"defaults.debug":    "debug",
+
+	"defaults.host_key_policy": "host-key-policy",
+	"defaults.known_hosts":     "known-hosts",
+}
+
+// applyDefaults resolves the flag-or-config settings through viper. Viper
+// never updates the bound flag variables, so the effective values are read
+// back with viper.GetX and written into opts.
+func applyDefaults(cmd *cobra.Command, opts *globalOptions, raw []byte) error {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(raw)); err != nil {
+		return fmt.Errorf("read config defaults: %w", err)
+	}
+	for key, flag := range defaultBindings {
+		if err := v.BindPFlag(key, cmd.Flags().Lookup(flag)); err != nil {
+			return err
+		}
+	}
+	if err := v.BindEnv("defaults.debug", "MRSH_DEBUG"); err != nil {
+		return err
+	}
+
+	opts.parallel = v.GetInt("defaults.parallel")
+	opts.timeout = v.GetInt("defaults.timeout")
+	opts.output = v.GetString("defaults.output")
+	opts.hostKeyPolicy = v.GetString("defaults.host_key_policy")
+	opts.knownHosts = v.GetString("defaults.known_hosts")
+	debug := v.GetBool("defaults.debug")
+	if debug != opts.debug {
+		opts.debug = debug
+		setupLogging(cmd.ErrOrStderr(), debug, opts.quiet)
+	}
+	if opts.parallel < 1 {
+		return fmt.Errorf("parallel must be at least 1, got %d", opts.parallel)
+	}
+	if opts.timeout < 1 {
+		return fmt.Errorf("timeout must be at least 1 second, got %d", opts.timeout)
+	}
+	switch opts.hostKeyPolicy {
+	case config.HostKeyStrict, config.HostKeyAcceptNew, config.HostKeyInsecure:
+	default:
+		return fmt.Errorf("invalid --host-key-policy %q: must be strict, accept-new or insecure", opts.hostKeyPolicy)
+	}
+	return validateOutput(opts.output)
+}
+
+func sourceKind(uri string) string {
+	if strings.HasPrefix(uri, "s3://") {
+		return "s3"
+	}
+	return "local"
+}
+
+// literalWarned remembers configs already warned about, so a long-running
+// mrsh ui repeats the warning only after the config changes.
+var literalWarned sync.Map // location + "@" + version -> struct{}
+
+// warnLiteralPasswords warns when the config stores passwords in the clear
+// (a literal pass rather than pass_env or pass_arn), naming where.
+func warnLiteralPasswords(cfg *config.Config, location, version string) {
+	places := config.LiteralPasswords(cfg)
+	if len(places) == 0 {
+		return
+	}
+	if _, seen := literalWarned.LoadOrStore(location+"@"+version, struct{}{}); seen {
+		return
+	}
+	const show = 5
+	where := strings.Join(places[:min(len(places), show)], ", ")
+	if len(places) > show {
+		where += fmt.Sprintf(" and %d more", len(places)-show)
+	}
+	slog.Warn(fmt.Sprintf("%s stores %d literal password(s) (%s); use pass_env or pass_arn so the file holds no secrets",
+		location, len(places), where))
+}

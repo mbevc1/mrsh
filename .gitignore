@@ -30,3 +30,11 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build output
+/mrsh
+/dist/
+
+# Local config (may hold secrets); `mrsh hosts example` prints a template
+/hosts.yaml
+/backups/

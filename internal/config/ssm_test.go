@@ -91,3 +91,27 @@ func TestSecretWriterRoundTrip(t *testing.T) {
 		t.Error("accepted an unqualified name")
 	}
 }
+
+func TestPassSource(t *testing.T) {
+	c := &Config{
+		Defaults:    Defaults{Credential: "base"},
+		Credentials: map[string]CredentialSet{"base": {Credentials: Credentials{Pass: "b"}}, "lab": {Credentials: Credentials{PassEnv: "L"}}, "keys": {IdentityFile: "~/.ssh/k"}},
+	}
+	for h, want := range map[Host]string{
+		{Name: "own", Credentials: Credentials{PassARN: "arn:aws:ssm:eu-west-1:123456789012:parameter/x"}}: "host own",
+		{Name: "set", Credential: "lab"}:   "credential lab",
+		{Name: "keys", Credential: "keys"}: "credential base", // its set has no pass: falls through to defaults' set
+		{Name: "plain"}:                    "credential base",
+	} {
+		if got := c.PassSource(h); got != want {
+			t.Errorf("PassSource(%s) = %q, want %q", h.Name, got, want)
+		}
+	}
+	c.Defaults.PassEnv = "D"
+	if got := c.PassSource(Host{Name: "plain"}); got != "defaults" {
+		t.Errorf("defaults own pass: %q", got)
+	}
+	if n, ok := SSMParamName("arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/hosts/a/pass"); !ok || n != "/mrsh/hosts/a/pass" {
+		t.Errorf("SSMParamName = %q, %v", n, ok)
+	}
+}

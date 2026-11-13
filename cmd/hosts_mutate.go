@@ -36,6 +36,7 @@ type secretFlags struct {
 	passARN   string
 	passSSM   string
 	overwrite bool
+	rotate    bool
 
 	userSSMARN, passSSMARN string        // set by store
 	stored                 []string      // "--pass-arn ARN" for each stored secret
@@ -56,6 +57,12 @@ func (f *secretFlags) register(cmd *cobra.Command) {
 	fl.BoolVar(&f.overwrite, "overwrite", false, "replace an existing SSM parameter (with --user-ssm/--pass-ssm)")
 	cmd.MarkFlagsMutuallyExclusive("pass", "pass-env", "pass-arn", "pass-ssm")
 	cmd.MarkFlagsMutuallyExclusive("user-env", "user-arn", "user-ssm")
+}
+
+// registerRotate adds --rotate-pass, for the commands that edit an existing entry.
+func (f *secretFlags) registerRotate(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.rotate, "rotate-pass", false, "generate a new password, set it on the RouterOS devices that use it, and store it in SSM")
+	cmd.MarkFlagsMutuallyExclusive("rotate-pass", "pass", "pass-env", "pass-arn")
 }
 
 // apply copies supplied user/pass flags onto c; a supplied variant replaces
@@ -219,10 +226,24 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		Aliases: []string{"u", "up"},
 		Short:   "Update fields of a host entry (only the flags given)",
 		Long: "Update fields of the host named by --name; only the flags given change.\n" +
-			"A new user or pass variant replaces the old one.\n\n" + sharedFlagsHelp,
+			"A new user or pass variant replaces the old one.\n\n" + sharedFlagsHelp + rotateFlagsHelp,
 		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.rotate {
+				if err := checkRotateOnly(cmd); err != nil {
+					return err
+				}
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				r, err := hostRotation(lc.cfg, f.name, passSSMFlag(cmd, &f.secretFlags))
+				if err != nil {
+					return err
+				}
+				return r.rotate(cmd, opts, &f.secretFlags, lc)
+			}
 			if f.wantsSSM(cmd) {
 				lc, err := loadConfig(cmd, opts)
 				if err != nil {
@@ -263,6 +284,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		},
 	}
 	f.register(cmd, opts)
+	f.registerRotate(cmd)
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }

@@ -101,12 +101,26 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 		Short:   "Create a credential set, or change the given fields of an existing one",
 		Long: "Create the named credential set, or update it: only the flags given change, and a new\n" +
 			"user or pass variant replaces the old one. The user and identity file come from the\n" +
-			"global -u/--user and -i/--identity-file (-i \"\" clears it).\n\n" + ssmFlagsHelp,
+			"global -u/--user and -i/--identity-file (-i \"\" clears it).\n\n" + ssmFlagsHelp + rotateFlagsHelp,
 		Example: "  mrsh credentials set --name routers -u admin --pass-ssm      # prompts; stores /mrsh/creds/routers/pass\n" +
 			"  mrsh credentials set --name routers -u admin --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers\n" +
 			"  mrsh hosts update --name rt1 --credential routers",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.rotate {
+				if err := checkRotateOnly(cmd); err != nil {
+					return err
+				}
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				r, err := credentialRotation(lc.cfg, name, passSSMFlag(cmd, &f))
+				if err != nil {
+					return err
+				}
+				return r.rotate(cmd, opts, &f, lc)
+			}
 			if f.wantsSSM(cmd) {
 				lc, err := loadConfig(cmd, opts)
 				if err != nil {
@@ -153,6 +167,7 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
 	f.register(cmd)
+	f.registerRotate(cmd)
 	return cmd
 }
 

@@ -195,6 +195,17 @@ func firstLine(s string) string {
 	return strings.TrimSpace(line)
 }
 
+// Quote makes s a RouterOS string literal: double quotes, with the
+// characters RouterOS treats specially inside them escaped.
+func Quote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, `?`, `\?`).Replace(s) + `"`
+}
+
+// PasswordCmd changes the logged-in user's own password.
+func PasswordCmd(oldPass, newPass string) string {
+	return "/password old-password=" + Quote(oldPass) + " new-password=" + Quote(newPass) + " confirm-new-password=" + Quote(newPass)
+}
+
 // routerOSErrors are phrases RouterOS prints (often with exit status 0)
 // when a command fails.
 var routerOSErrors = []string{"failure:", "bad command name", "syntax error", "expected end of command", "no such item", "input does not match"}

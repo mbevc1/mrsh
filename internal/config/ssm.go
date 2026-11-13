@@ -64,15 +64,38 @@ func (c *Config) SSMName(owner, name, field string) string {
 	return c.SSMPrefix() + "/" + owner + "/" + name + "/" + field
 }
 
-// ManagedSSMName returns the parameter name of an SSM ARN when it lies under
-// the config's prefix, the only parameters mrsh will delete.
-func (c *Config) ManagedSSMName(arnValue string) (string, bool) {
+// SSMParamName returns the hierarchical parameter name an SSM ARN points
+// at, e.g. /mrsh/creds/routers/pass.
+func SSMParamName(arnValue string) (string, bool) {
 	a, err := parseARN(arnValue)
 	if err != nil || a.Service != "ssm" {
 		return "", false
 	}
-	name := "/" + strings.TrimPrefix(strings.SplitN(a.Base, ":parameter/", 2)[1], "/")
-	return name, strings.HasPrefix(name, c.SSMPrefix()+"/")
+	return "/" + strings.TrimPrefix(strings.SplitN(a.Base, ":parameter/", 2)[1], "/"), true
+}
+
+// ManagedSSMName returns the parameter name of an SSM ARN when it lies under
+// the config's prefix, the only parameters mrsh will delete.
+func (c *Config) ManagedSSMName(arnValue string) (string, bool) {
+	name, ok := SSMParamName(arnValue)
+	return name, ok && strings.HasPrefix(name, c.SSMPrefix()+"/")
+}
+
+// PassSource names where Effective takes h's password from: "host NAME",
+// "credential NAME" (the host's set or the defaults' set), "defaults", or
+// "" when nothing sets one.
+func (c *Config) PassSource(h Host) string {
+	switch d := c.Defaults; {
+	case h.PassRef().Kind() != KindUnset:
+		return "host " + h.Name
+	case h.Credential != "" && c.Credentials[h.Credential].PassRef().Kind() != KindUnset:
+		return "credential " + h.Credential
+	case d.PassRef().Kind() != KindUnset:
+		return "defaults"
+	case d.Credential != "" && c.Credentials[d.Credential].PassRef().Kind() != KindUnset:
+		return "credential " + d.Credential
+	}
+	return ""
 }
 
 // SecretWriter stores and deletes secrets in SSM Parameter Store.

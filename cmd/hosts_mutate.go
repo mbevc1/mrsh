@@ -61,7 +61,7 @@ func (f *secretFlags) register(cmd *cobra.Command) {
 
 // registerRotate adds --rotate-pass, for the commands that edit an existing entry.
 func (f *secretFlags) registerRotate(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&f.rotate, "rotate-pass", false, "generate a new password, set it on the RouterOS devices that use it, and store it in SSM")
+	cmd.Flags().BoolVar(&f.rotate, "rotate-pass", false, "generate a new password, set it on the RouterOS devices that use it, and keep it where the old one was")
 	cmd.MarkFlagsMutuallyExclusive("rotate-pass", "pass", "pass-env", "pass-arn")
 }
 
@@ -238,11 +238,11 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				r, err := hostRotation(lc.cfg, f.name, passSSMFlag(cmd, &f.secretFlags))
+				r, err := hostRotation(lc.cfg, f.name)
 				if err != nil {
 					return err
 				}
-				return r.rotate(cmd, opts, &f.secretFlags, lc)
+				return r.rotate(cmd, opts, lc)
 			}
 			if f.wantsSSM(cmd) {
 				lc, err := loadConfig(cmd, opts)

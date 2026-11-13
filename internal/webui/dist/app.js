@@ -107,7 +107,7 @@ function copyIcon() {
 
 // copyText uses the Clipboard API (loopback counts as a secure context),
 // falling back to a hidden textarea for older browsers.
-async function copyText(text, what) {
+async function copyText(text, what, echo = true) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -121,7 +121,7 @@ async function copyText(text, what) {
     ta.remove();
     if (!ok) { toast(`Could not copy ${what}`); return; }
   }
-  toast(`Copied ${what}: ${text}`);
+  toast(echo ? `Copied ${what}: ${text}` : `Copied ${what}`);
 }
 
 function copyButton(text, what, title = `Copy ${what}`) {
@@ -789,6 +789,16 @@ async function removeCredential(c, btn) {
 
 // rotateButton is always built, so every row's buttons line up; without a
 // password of its own to rotate it is an invisible, inert placeholder.
+// showOnce puts the new password in the result dialog. It is never kept:
+// closing the dialog clears it, and the server has no way to show it again.
+function showOnce(password, plan) {
+  $("#rotate-password").textContent = password;
+  $("#rotate-secret-note").textContent = plan.store === "env"
+    ? `Set ${plan.dest} to it before the next mrsh run; nothing else keeps it. It is not shown again after you close this window.`
+    : "It is not shown again after you close this window.";
+  $("#rotate-secret").hidden = false;
+}
+
 function rotateButton(kind, name, available) {
   const b = document.createElement("button");
   b.type = "button"; b.className = "link"; b.textContent = "Rotate";
@@ -798,7 +808,7 @@ function rotateButton(kind, name, available) {
     b.disabled = true;
     return b;
   }
-  b.title = "Set a new random password on its RouterOS devices and store it in SSM";
+  b.title = "Set a new random password on its RouterOS devices, kept where the current one is";
   b.addEventListener("click", () => rotatePass(kind, name, b));
   return b;
 }
@@ -818,8 +828,9 @@ async function rotatePass(kind, name, btn) {
   const answer = await askConfirm({
     title: `Rotate the password of ${plan.label}?`,
     text: `A new random password is set on ${n} RouterOS device${n === 1 ? "" : "s"} (${plan.hosts.join(", ")}) and ` +
-      (plan.in_place ? `replaces the one in SSM parameter ${plan.dest}.` : `stored in SSM as ${plan.dest}; the config then points at it.`) +
-      " If any device fails, the others are set back to the old password.",
+      { ssm: `replaces the one in SSM parameter ${plan.dest}.`, literal: "replaces the literal in the config.",
+        env: `shown to you: set the environment variable ${plan.dest} to it yourself (this mrsh ui uses it until it stops).` }[plan.store] +
+      " If any device fails, the others are set back to the old password. The new password is shown once.",
     ok: "Rotate",
   });
   if (!answer.ok) return;
@@ -838,6 +849,7 @@ async function rotatePass(kind, name, btn) {
     return li;
   }));
   msg.hidden = true; msg.className = "";
+  $("#rotate-secret").hidden = true;
   state.rotating = true;
   close.disabled = true;
   dlg.showModal();
@@ -851,6 +863,7 @@ async function rotatePass(kind, name, btn) {
       for (const r of outcome.results) { results[r.name] = r; show(r.name); }
       text = [outcome.message, ...(outcome.notes || []).map((x) => `Note: ${x}`)].join(" ");
       failed = !outcome.ok;
+      if (outcome.password) showOnce(outcome.password, plan);
     } catch (err) {
       text = `Rotation failed: ${err.message}`;
       failed = true;
@@ -957,6 +970,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#test-run").addEventListener("click", () => runTests(selectedTests(), $("#test-run")));
   // The rotation's outcome must be seen; Esc does not close it while it runs.
   $("#rotate-dialog").addEventListener("cancel", (e) => { if (state.rotating) e.preventDefault(); });
+  $("#rotate-dialog").addEventListener("close", () => { $("#rotate-password").textContent = ""; $("#rotate-secret").hidden = true; });
+  $("#rotate-copy").append(copyIcon());
+  $("#rotate-copy").addEventListener("click", () => copyText($("#rotate-password").textContent, "the new password", false));
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

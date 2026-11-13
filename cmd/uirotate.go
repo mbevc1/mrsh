@@ -12,33 +12,14 @@ import (
 	"github.com/mbevc1/mrsh/internal/webui"
 )
 
-// uiRotation is the rotation the page's Rotate button means: in place when
-// the password is already in SSM, otherwise into the default parameter
-// (so the config moves to SSM, as --pass-ssm would). A host must have its
-// own password; one taken from a credential set is rotated with the set.
+// uiRotation is the rotation the page's Rotate button means, the same as
+// --rotate-pass on the set or host.
 func uiRotation(cfg *config.Config, kind, name string) (*rotation, error) {
-	inSSM := func(arn string) bool { _, ok := config.SSMParamName(arn); return ok }
-	passSSM := ssmDefault
 	switch kind {
 	case "credential":
-		if set, ok := cfg.Credentials[name]; ok && inSSM(set.PassARN) {
-			passSSM = ""
-		}
-		return credentialRotation(cfg, name, passSSM)
+		return credentialRotation(cfg, name)
 	case "host":
-		h, ok := findHost(cfg, name)
-		if !ok {
-			return nil, fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
-		}
-		switch src := cfg.PassSource(h); {
-		case strings.HasPrefix(src, "credential "):
-			return nil, fmt.Errorf("host %s uses the password of %s: rotate it there", name, src)
-		case src != "host "+name:
-			return nil, fmt.Errorf("host %s has no password of its own to rotate", name)
-		case inSSM(h.PassARN):
-			passSSM = ""
-		}
-		return hostRotation(cfg, name, passSSM)
+		return hostRotation(cfg, name)
 	}
 	return nil, fmt.Errorf("unknown kind %q", kind)
 }
@@ -63,7 +44,7 @@ func hostRotator(s *savedRunner) *webui.Rotator {
 			if err != nil {
 				return webui.RotatePlan{}, err
 			}
-			return webui.RotatePlan{Label: r.label, Hosts: r.hosts, Dest: r.dest, InPlace: r.current != ""}, nil
+			return webui.RotatePlan{Label: r.label, Hosts: r.hosts, Store: r.store, Dest: r.dest}, nil
 		},
 		Apply: func(ctx context.Context, kind, name string, progress func(webui.RotateResult)) (webui.RotateOutcome, error) {
 			if progress == nil {
@@ -86,8 +67,12 @@ func hostRotator(s *savedRunner) *webui.Rotator {
 			ctx, cancel := context.WithTimeout(ctx, time.Duration(rounds)*(3*time.Duration(timeout)*time.Second+time.Minute))
 			defer cancel()
 
+			var w config.SecretWriter
+			if r.store == storeSSM {
+				w = newSecretWriter()
+			}
 			o, err := r.execute(ctx, rotationEngine{
-				co: co, parallel: parallel, w: newSecretWriter(), store: lc.store,
+				co: co, parallel: parallel, w: w, store: lc.store,
 				progress: func(t runner.Target, step string) {
 					progress(webui.RotateResult{Name: t.Name, Host: t.Host.Host, OK: true, Running: true, Summary: step})
 				},
@@ -102,7 +87,8 @@ func hostRotator(s *savedRunner) *webui.Rotator {
 			if err != nil && o.Results == nil {
 				return webui.RotateOutcome{}, err
 			}
-			out := webui.RotateOutcome{OK: o.Committed && err == nil, Message: r.summary(o), Notes: o.Notes}
+			// The page shows the new password once, in the outcome only.
+			out := webui.RotateOutcome{OK: o.Committed && err == nil, Message: r.summary(o), Notes: o.Notes, Password: o.NewPass}
 			if err != nil {
 				out.Message = err.Error()
 			}

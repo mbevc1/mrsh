@@ -11,10 +11,10 @@ import (
 
 // RotatePlan is what a password rotation would do, for the page to confirm.
 type RotatePlan struct {
-	Label   string   `json:"label"`    // "credential routers" or "host rb02"
-	Hosts   []string `json:"hosts"`    // devices whose password changes
-	Dest    string   `json:"dest"`     // SSM parameter that will hold the new password
-	InPlace bool     `json:"in_place"` // Dest already holds the current password
+	Label string   `json:"label"` // "credential routers" or "host rb02"
+	Hosts []string `json:"hosts"` // devices whose password changes
+	Store string   `json:"store"` // where it stays: "ssm", "literal" (the config) or "env"
+	Dest  string   `json:"dest"`  // the SSM parameter or environment variable
 }
 
 // RotateResult is one device's state during or after a rotation.
@@ -27,18 +27,21 @@ type RotateResult struct {
 	Running bool   `json:"running,omitempty"` // a progress update; the final result follows
 }
 
-// RotateOutcome is how a rotation ended. OK means every device and SSM
-// have the new password; otherwise Message says where things stand.
+// RotateOutcome is how a rotation ended. OK means every device has the new
+// password and it is stored where the old one was; otherwise Message says
+// where things stand. Password is the new password whenever any device
+// has it, for the page to show once.
 type RotateOutcome struct {
-	OK      bool           `json:"ok"`
-	Message string         `json:"message"`
-	Notes   []string       `json:"notes,omitempty"`
-	Results []RotateResult `json:"results"`
+	OK       bool           `json:"ok"`
+	Message  string         `json:"message"`
+	Notes    []string       `json:"notes,omitempty"`
+	Password string         `json:"password,omitempty"`
+	Results  []RotateResult `json:"results"`
 }
 
 // Rotator rotates the password of a credential set ("credential") or of a
-// host's own password ("host") on RouterOS devices and in SSM, as
-// --rotate-pass does. Plan only describes it. Apply reports to progress
+// host's own password ("host") on RouterOS devices, keeping it where it is
+// stored, as --rotate-pass does. Plan only describes it. Apply reports to progress
 // (which may be nil) as devices move through their steps. Both return an
 // error wrapping config.ErrHostNotFound or config.ErrCredentialNotFound
 // for an unknown name; an Apply error means no device was changed.

@@ -31,12 +31,12 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | Command | What it does |
 |---------|--------------|
 | `run -c CMD` / `run --script FILE` (aliases `ru`, `r`) | Run a command, or a local script piped to `sh -s`. With neither, runs the config's `commands:` list. |
-| `credentials list\|set\|remove\|rename\|default\|assign` (aliases `creds`, `cred`) | Manage reusable credential sets (user, pass, identity file): `default NAME` sets the one `defaults` uses, `assign --name NAME -g GROUP` (or `-H HOST`, or `--clear`) points many hosts at one, `rename` updates every reference. `set --pass-ssm` stores the password in SSM, and `set --rotate-pass` rotates it on the devices. See [Secrets](#secrets). |
+| `credentials list\|set\|remove\|rename\|default\|assign` (aliases `creds`, `cred`) | Manage reusable credential sets (user, pass, identity file): `default NAME` sets the one `defaults` uses, `assign --name NAME -g GROUP` (or `-H HOST`, or `--clear`) points many hosts at one, `rename` updates every reference. `set --pass-ssm` stores the password in SSM, and `set --rotate-pass` rotates it on the devices, keeping it where it is stored. See [Secrets](#secrets). |
 | `hosts init\|example\|list\|add\|update\|remove\|copy` (aliases `host`, `ho`, `h`) | Manage the host inventory. `example` prints an annotated config. `list` masks literal passwords unless `--show-secrets`. `copy --to DEST` moves the config between local paths and S3 (see [Config and output](#config-and-output)). `add`/`update` take `--pass-ssm` and `--user-ssm`, and `update --rotate-pass` rotates a host's own password. |
 | `mt backup` (aliases `b`, `ba`, `bck`) | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot` (alias `re`), `mt upgrade` (alias `up`) | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware); each step ends in a reboot, so a device behind on both needs two runs. `mt upgrade --wait` instead waits for each reboot (up to 10 minutes per device) and takes every step in one run, ending with a fresh check. Both commands ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` (aliases `v`, `ver`) | Firmware and package versions across the fleet. |
-| `ui` | A local browser editor for the same config (loopback only): hosts, credential sets, defaults and commands. Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. Its **Rotate** buttons rotate a RouterOS password, as `--rotate-pass` does. Its **Finish all steps** box, ticked by default, works like `--wait`; untick it to take one step per click, as the CLI does by default. It runs no other commands. |
+| `ui` | A local browser editor for the same config (loopback only): hosts, credential sets, defaults and commands. Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. Its **Rotate** buttons rotate a RouterOS password, as `--rotate-pass` does, and show the new one once. Its **Finish all steps** box, ticked by default, works like `--wait`; untick it to take one step per click, as the CLI does by default. It runs no other commands. |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names, groups and credential set names complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
@@ -96,22 +96,29 @@ printf '%s\n' "$RB03_PASS" | mrsh hosts add --name rb03 -H 10.0.0.3 --pass-ssm
 
 ### Rotating a password
 
-`--rotate-pass` on `credentials set` (every host that takes its password from the set) or `hosts update` (that host's own password) generates a new 24-character password, then:
+`--rotate-pass` on `credentials set` (every host that takes its password from the set) or `hosts update` (that host's own password) generates a new 24-character password, sets it on every device, and keeps it where the old one was:
 
-1. stores it in SSM first (in a `-next` staging parameter when replacing in place), so it is never only in memory;
-2. on each device, checks it is RouterOS, changes the login user's password with `/password`, and confirms a fresh login with the new one;
-3. once every device has succeeded, writes it to the parameter and removes the staging copy;
-4. if any device fails, sets the others back to the old password and leaves SSM as it was. If a device cannot be set back, the staging parameter keeps the new password and the error names both.
+| Old password in | New password goes to |
+|-----------------|----------------------|
+| SSM (`pass_arn` to a parameter) | the same parameter, updated in place |
+| the config (`pass`) | the config, as the new literal |
+| an environment variable (`pass_env`) | you: it is printed, and you set the variable yourself |
+
+Secrets Manager passwords are refused. To move a password into SSM, run `--pass-ssm` on its own first, then rotate.
+
+1. For SSM, the new password is stored first in a `-next` staging parameter, so it is never only in memory.
+2. On each device, mrsh checks it is RouterOS, changes the login user's password with `/password`, and confirms a fresh login with the new one.
+3. Once every device has succeeded, the new password is stored (the parameter is updated and the staging copy removed, or the config is rewritten).
+4. If any device fails, the others are set back to the old password and nothing is stored. If a device cannot be set back, the new password is kept for it: in the staging parameter for SSM, otherwise shown in the output.
 
 ```bash
-mrsh creds set --name routers --rotate-pass                 # in place, in the set's SSM parameter
-mrsh creds set --name routers --rotate-pass --pass-ssm      # move a literal or env password into SSM while rotating
-mrsh hosts update --name rb02 --rotate-pass --dry-run       # list the devices it would change
+mrsh creds set --name routers --rotate-pass             # wherever the set's password lives
+mrsh hosts update --name rb02 --rotate-pass --dry-run   # list the devices it would change
 ```
 
-It asks for confirmation unless `-y`, works on RouterOS devices only, and changes only the password (run other changes separately). The password must already be in SSM, or `--pass-ssm` must say where to store the new one. The new password is never printed.
+The new password is printed once at the end when stdout is a terminal, and kept out of logs otherwise. It is always printed when the output is its only copy: for an environment variable, or when it could not be stored. It asks for confirmation unless `-y`, works on RouterOS devices only, and changes only the password (run other changes separately). A host that takes its password from a credential set is rotated through the set.
 
-In the UI, **Rotate** on a credential set, or on a host with its own password, does the same after a confirmation that lists the devices and the parameter. A password already in SSM rotates in place; any other moves to the default parameter name, and the config points at it. A dialog shows each device's step as it happens and the outcome at the end. A rotation runs to completion even if the page is closed, and Ctrl-C or Exit waits for it.
+In the UI, **Rotate** on a credential set, or on a host with its own password, does the same after a confirmation that lists the devices and where the password stays. A dialog shows each device's step as it happens, then the outcome and the new password with a copy button. The password is shown once: closing the dialog clears it. For an environment variable, the running `mrsh ui` uses the new value until it stops. A rotation runs to completion even if the page is closed, and Ctrl-C or Exit waits for it.
 
 Secrets are resolved only for the hosts a command targets, using the standard AWS credential chain. `--debug` logs which source each secret came from, never its value. A literal `pass` makes the config file itself a secret, so every command that loads such a config warns, naming where (`mrsh: warning: hosts.yaml stores 1 literal password(s) (host web02); …`), and so does `--pass` on `hosts add/update` and `credentials set`.
 

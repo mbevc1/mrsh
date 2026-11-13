@@ -134,6 +134,9 @@ dialog.confirm label.check { display: flex; gap: 8px; align-items: flex-start; }
 .rotate-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.confirm p#rotate-message { color: var(--text); }
 dialog.confirm p#rotate-message.fail { color: var(--danger); }
+.secret-once { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.secret-once .secret-line { display: flex; gap: 8px; align-items: center; }
+.secret-once code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; font-size: 14px; }
 code { font-family: var(--mono); font-size: 12px; }
 @media (max-width: 600px) {
   /* minmax(0, …), min-width: 0 and width: 100% let fields shrink to the

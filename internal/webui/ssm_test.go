@@ -168,7 +168,7 @@ func TestRotateRoutes(t *testing.T) {
 			if name == "ghost" {
 				return RotatePlan{}, fmt.Errorf("%w: ghost", config.ErrCredentialNotFound)
 			}
-			return RotatePlan{Label: kind + " " + name, Hosts: []string{"rt1"}, Dest: "/mrsh/creds/lab/pass", InPlace: true}, nil
+			return RotatePlan{Label: kind + " " + name, Hosts: []string{"rt1"}, Store: "ssm", Dest: "/mrsh/creds/lab/pass"}, nil
 		},
 		Apply: func(ctx context.Context, kind, name string, progress func(RotateResult)) (RotateOutcome, error) {
 			switch name {
@@ -190,7 +190,7 @@ func TestRotateRoutes(t *testing.T) {
 	}
 	f.h = f.srv.Handler()
 
-	if w, out := f.do("POST", "/api/rotate/plan", `{"kind":"credential","name":"lab"}`); w.Code != 200 || out["dest"] != "/mrsh/creds/lab/pass" || out["in_place"] != true {
+	if w, out := f.do("POST", "/api/rotate/plan", `{"kind":"credential","name":"lab"}`); w.Code != 200 || out["dest"] != "/mrsh/creds/lab/pass" || out["store"] != "ssm" {
 		t.Errorf("plan: %d %v", w.Code, out)
 	}
 	for _, tc := range []struct {

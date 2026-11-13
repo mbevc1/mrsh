@@ -34,7 +34,7 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 		Long: "Starts a loopback-only web editor for the --config source (local or s3://) and opens it.\n" +
 			"It edits config and can act on saved hosts: Test connects (resolving their secrets) and runs\n" +
 			"the read-only RouterOS version check; Upgrade runs the `mt upgrade` step (devices reboot);\n" +
-			"Rotate changes a RouterOS password and stores it in SSM, as --rotate-pass does.\n" +
+			"Rotate changes a RouterOS password where it is stored, as --rotate-pass does.\n" +
 			"It never runs other commands.\n" +
 			"Stop it with Ctrl-C or the page's Exit button; nothing keeps running afterwards.",
 		Args: cobra.NoArgs,

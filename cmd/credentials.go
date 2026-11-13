@@ -115,11 +115,11 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				r, err := credentialRotation(lc.cfg, name, passSSMFlag(cmd, &f))
+				r, err := credentialRotation(lc.cfg, name)
 				if err != nil {
 					return err
 				}
-				return r.rotate(cmd, opts, &f, lc)
+				return r.rotate(cmd, opts, lc)
 			}
 			if f.wantsSSM(cmd) {
 				lc, err := loadConfig(cmd, opts)

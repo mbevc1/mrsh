@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -88,7 +89,7 @@ func TestRotateCredentialInPlace(t *testing.T) {
 	before := readFile(t, cfg)
 
 	out, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y")
-	if err != nil || !strings.Contains(out, "rotated the password of credential routers on 2 device(s); stored in SSM as /mrsh/creds/routers/pass") {
+	if err != nil || !strings.Contains(out, "rotated the password of credential routers on 2 device(s); stored in SSM parameter /mrsh/creds/routers/pass") {
 		t.Fatalf("rotate: %v\n%s", err, out)
 	}
 	newPass := fake.Param("/mrsh/creds/routers/pass").Value
@@ -112,7 +113,7 @@ func TestRotateRollsBackOnFailure(t *testing.T) {
 		hostLine("rt1", rt1, ", credential: routers")+hostLine("rt2", rt2, ", credential: routers"))
 
 	out, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y")
-	if exitCode(err) != exitHostFailed || !strings.Contains(err.Error(), "every device is back on the old password and SSM is unchanged") {
+	if exitCode(err) != exitHostFailed || !strings.Contains(err.Error(), "every device is back on the old password and SSM parameter /mrsh/creds/routers/pass is unchanged") {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
 	if rt1.password() != "old" || rt2.password() != "old" || fake.Param("/mrsh/creds/routers/pass").Value != "old" || fake.Param("/mrsh/creds/routers/pass-next") != nil {
@@ -133,7 +134,7 @@ func TestRotateKeepsNewPasswordWhenRollbackFails(t *testing.T) {
 		hostLine("rt1", rt1, ", credential: routers")+hostLine("rt2", rt2, ", credential: routers"))
 
 	_, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y")
-	if exitCode(err) != exitHostFailed || !strings.Contains(err.Error(), "rt1 still have the new password; it is kept in SSM as /mrsh/creds/routers/pass-next") {
+	if exitCode(err) != exitHostFailed || !strings.Contains(err.Error(), "rt1 still has the new password; it is kept in SSM as /mrsh/creds/routers/pass-next") {
 		t.Fatalf("err = %v", err)
 	}
 	staged := fake.Param("/mrsh/creds/routers/pass-next")
@@ -142,44 +143,54 @@ func TestRotateKeepsNewPasswordWhenRollbackFails(t *testing.T) {
 	}
 }
 
-func TestRotateIntoSSMAndHostRules(t *testing.T) {
+func TestRotateKeepsTheStoreAndHostRules(t *testing.T) {
 	fake := ssmtest.Start(t)
-	rt1, box := startPwRouter(t, "old"), sshtest.Start(t, sshtest.Options{User: "admin", Password: "boxpw"})
+	rt1, envRt, box := startPwRouter(t, "old"), startPwRouter(t, "envpw"), sshtest.Start(t, sshtest.Options{User: "admin", Password: "boxpw"})
+	t.Setenv("RT_ENV_PASS", "envpw")
 	cfg := writeConfig(t, "defaults: {host_key_policy: insecure}\ncredentials:\n  routers: {user: admin, pass: old}\nhosts:\n"+
-		hostLine("rt1", rt1, ", credential: routers")+fmt.Sprintf("  - {name: box, host: %s, port: %d, user: admin, pass: boxpw}\n", box.Host, box.Port))
+		hostLine("rt1", rt1, ", credential: routers")+hostLine("envrt", envRt, ", user: admin, pass_env: RT_ENV_PASS")+
+		fmt.Sprintf("  - {name: box, host: %s, port: %d, user: admin, pass: boxpw}\n", box.Host, box.Port)+
+		"  - {name: sm, host: 10.0.0.9, user: admin, pass_arn: arn:aws:secretsmanager:eu-west-1:123456789012:secret:rt-AbCdEf}\n")
 
-	// A literal password must be given an SSM home.
-	if _, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y"); err == nil || !strings.Contains(err.Error(), "add --pass-ssm") {
-		t.Fatalf("literal source: %v", err)
-	}
-	// A host on a set's password points at the set.
-	if _, _, err := execIn(t, "", "-q", "-f", cfg, "hosts", "update", "--name", "rt1", "--rotate-pass", "-y"); err == nil || !strings.Contains(err.Error(), "credentials set --name routers --rotate-pass") {
-		t.Fatalf("inherited: %v", err)
+	// Refusals: moving the password while rotating, other changes alongside,
+	// a host on a set's password, and Secrets Manager.
+	for args, want := range map[string]string{
+		"creds set --name routers --rotate-pass --pass-ssm -y": "run --pass-ssm on its own first",
+		"creds set --name routers --rotate-pass -u x -y":       "changes only the password",
+		"hosts update --name rt1 --rotate-pass -y":             "credentials set --name routers --rotate-pass",
+		"hosts update --name sm --rotate-pass -y":              "is not an SSM parameter",
+	} {
+		if _, _, err := execIn(t, "", append([]string{"-q", "-f", cfg}, strings.Fields(args)...)...); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", args, err)
+		}
 	}
 	// Dry run touches nothing.
-	if out, _, err := execIn(t, "", "-q", "-f", cfg, "--dry-run", "creds", "set", "--name", "routers", "--rotate-pass", "--pass-ssm"); err != nil || !strings.Contains(out, "rt1") || len(fake.Calls()) != 0 || rt1.password() != "old" {
-		t.Fatalf("dry run: %v calls=%v\n%s", err, fake.Calls(), out)
-	}
-	// Other changes alongside are refused.
-	if _, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-u", "x"); err == nil || !strings.Contains(err.Error(), "changes only the password") {
-		t.Fatalf("mixed: %v", err)
+	if out, _, err := execIn(t, "", "-q", "-f", cfg, "--dry-run", "creds", "set", "--name", "routers", "--rotate-pass"); err != nil || !strings.Contains(out, "kept in the config") || rt1.password() != "old" {
+		t.Fatalf("dry run: %v\n%s", err, out)
 	}
 
-	// Moving into SSM: the config switches from the literal to the new parameter.
-	if _, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "--pass-ssm", "-y"); err != nil {
-		t.Fatal(err)
-	}
+	// A literal stays a literal, with the new value; off a terminal it is not printed.
+	out, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y")
 	set := loadCfg(t, cfg).Credentials["routers"]
-	if set.Pass != "" || set.PassARN != fake.ARN("/mrsh/creds/routers/pass") || fake.Param("/mrsh/creds/routers/pass").Value != rt1.password() {
-		t.Errorf("after move: set=%+v rt1=%q", set, rt1.password())
+	if err != nil || set.Pass != rt1.password() || set.Pass == "old" || set.PassARN != "" || !strings.Contains(out, "stored in the config") || strings.Contains(out, set.Pass) {
+		t.Fatalf("literal: %v set=%+v rt1=%q\n%s", err, set, rt1.password(), out)
 	}
 
-	// Only RouterOS passwords rotate; a failure here leaves no new parameter.
-	if _, _, err := execIn(t, "", "-q", "-f", cfg, "hosts", "update", "--name", "box", "--rotate-pass", "--pass-ssm", "-y"); exitCode(err) != exitHostFailed {
+	// An environment variable stays one: the new password is printed, since
+	// nothing else keeps it, and this process uses it from now on.
+	out, _, err = execIn(t, "", "-q", "-f", cfg, "hosts", "update", "--name", "envrt", "--rotate-pass", "-y")
+	h, _ := findHost(loadCfg(t, cfg), "envrt")
+	if err != nil || envRt.password() == "envpw" || !strings.Contains(out, "new password for host envrt (shown once): "+envRt.password()) ||
+		!strings.Contains(out, "set RT_ENV_PASS to the new password") || h.PassEnv != "RT_ENV_PASS" || os.Getenv("RT_ENV_PASS") != envRt.password() {
+		t.Fatalf("env: %v host=%+v\n%s", err, h, out)
+	}
+
+	// Only RouterOS passwords rotate; a failure changes nothing.
+	if _, _, err := execIn(t, "", "-q", "-f", cfg, "hosts", "update", "--name", "box", "--rotate-pass", "-y"); exitCode(err) != exitHostFailed {
 		t.Fatalf("linux host: %v", err)
 	}
-	if fake.Param("/mrsh/hosts/box/pass") != nil || loadCfg(t, cfg).Hosts[1].Pass != "boxpw" {
-		t.Error("a failed rotation left a parameter or changed the config")
+	if h, _ := findHost(loadCfg(t, cfg), "box"); h.Pass != "boxpw" || len(fake.Calls()) != 0 {
+		t.Errorf("a failed rotation changed something: %+v calls=%v", h, fake.Calls())
 	}
 }
 
@@ -194,17 +205,18 @@ func TestUIRotation(t *testing.T) {
 
 	// The plan names the devices and where the password goes.
 	if code, body := post("/api/rotate/plan", `{"kind":"credential","name":"routers"}`); code != 200 ||
-		!strings.Contains(string(body), `"hosts":["rt1","rt2"],"dest":"/mrsh/creds/routers/pass","in_place":true`) {
+		!strings.Contains(string(body), `"hosts":["rt1","rt2"],"store":"ssm","dest":"/mrsh/creds/routers/pass"`) {
 		t.Fatalf("plan: %d %s", code, body)
 	}
 	if code, body := post("/api/rotate/plan", `{"kind":"host","name":"rt1"}`); code != 422 || !strings.Contains(string(body), "uses the password of credential routers") {
 		t.Errorf("inherited: %d %s", code, body)
 	}
-	if code, body := post("/api/rotate/plan", `{"kind":"host","name":"lit"}`); code != 200 || !strings.Contains(string(body), `"dest":"/mrsh/hosts/lit/pass","in_place":false`) {
+	if code, body := post("/api/rotate/plan", `{"kind":"host","name":"lit"}`); code != 200 || !strings.Contains(string(body), `"store":"literal"`) {
 		t.Errorf("literal: %d %s", code, body)
 	}
 
-	// Streamed: each device's steps, then the outcome; nothing secret.
+	// Streamed: each device's steps, then the outcome, which alone carries
+	// the new password for the page to show once.
 	code, body := post("/api/rotate/apply", `{"kind":"credential","name":"routers","confirm":true,"stream":true}`)
 	newPass := fake.Param("/mrsh/creds/routers/pass").Value
 	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
@@ -214,8 +226,8 @@ func TestUIRotation(t *testing.T) {
 		!strings.HasPrefix(last, `{"outcome":{"ok":true,"message":"rotated the password of credential routers on 2 device(s)`) {
 		t.Fatalf("apply: %d\n%s", code, body)
 	}
-	if strings.Contains(string(body), newPass) || strings.Contains(string(body), `"old"`) {
-		t.Error("a password reached the page")
+	if strings.Contains(strings.Join(lines[:len(lines)-1], "\n"), newPass) || !strings.Contains(last, `"password":"`+newPass+`"`) || strings.Contains(string(body), `"old"`) {
+		t.Errorf("the new password should be in the outcome only:\n%s", body)
 	}
 
 	// A host's own SSM password rotates in place under its own name.
@@ -224,13 +236,13 @@ func TestUIRotation(t *testing.T) {
 		t.Errorf("own: %d %s", code, body)
 	}
 
-	// A literal password moves to SSM and the config follows.
+	// A literal stays a literal, with the new value.
 	if code, body := post("/api/rotate/apply", `{"kind":"host","name":"lit","confirm":true}`); code != 200 || !strings.Contains(string(body), `"ok":true`) {
 		t.Fatalf("literal: %d %s", code, body)
 	}
 	h, _ := findHost(loadCfg(t, cfg), "lit")
-	if h.Pass != "" || h.PassARN != fake.ARN("/mrsh/hosts/lit/pass") || fake.Param("/mrsh/hosts/lit/pass").Value != lit.password() {
-		t.Errorf("after move: %+v lit=%q", h, lit.password())
+	if h.Pass != lit.password() || h.Pass == "lit" || h.PassARN != "" || fake.Param("/mrsh/hosts/lit/pass") != nil {
+		t.Errorf("after rotation: %+v lit=%q", h, lit.password())
 	}
 
 	// A failure rolls back and says so; the reply is still 200 with ok false.
@@ -238,7 +250,25 @@ func TestUIRotation(t *testing.T) {
 	before := rt1.password()
 	code, body = post("/api/rotate/apply", `{"kind":"credential","name":"routers","confirm":true}`)
 	if code != 200 || !strings.Contains(string(body), `"ok":false`) || !strings.Contains(string(body), "every device is back on the old password") ||
-		!strings.Contains(string(body), "rolled back: another device failed") || rt1.password() != before || fake.Param("/mrsh/creds/routers/pass").Value != before {
+		!strings.Contains(string(body), "rolled back: another device failed") || strings.Contains(string(body), `"password"`) ||
+		rt1.password() != before || fake.Param("/mrsh/creds/routers/pass").Value != before {
 		t.Errorf("rollback: %d %s", code, body)
+	}
+}
+
+func TestRotateLiteralShowsPasswordWhenStuck(t *testing.T) {
+	rt1, rt2 := startPwRouter(t, "old"), startPwRouter(t, "old")
+	rt1.allow(1) // takes the new password, then refuses to go back
+	rt2.allow(0)
+	cfg := writeConfig(t, "defaults: {host_key_policy: insecure}\ncredentials:\n  routers: {user: admin, pass: old}\nhosts:\n"+
+		hostLine("rt1", rt1, ", credential: routers")+hostLine("rt2", rt2, ", credential: routers"))
+
+	out, _, err := execIn(t, "", "-q", "-f", cfg, "creds", "set", "--name", "routers", "--rotate-pass", "-y")
+	if exitCode(err) != exitHostFailed || !strings.Contains(err.Error(), "rt1 still has the new password, shown below; the config still holds the old one") ||
+		!strings.Contains(out, "new password for credential routers (shown once): "+rt1.password()) || rt1.password() == "old" {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if loadCfg(t, cfg).Credentials["routers"].Pass != "old" {
+		t.Error("the config changed after a failed rotation")
 	}
 }

@@ -14,17 +14,32 @@ import (
 
 const sharedFlagsHelp = "The address, group, user and identity file come from the global flags:\n" +
 	"  -H/--host ADDRESS, -g/--group GROUP, -u/--user USER, -i/--identity-file PATH.\n" +
-	"Set at most one of --user/--user-env/--user-arn and of --pass/--pass-env/--pass-arn.\n" +
-	"--credential NAME uses a credential set (see mrsh credentials); fields set on the host win."
+	"Set at most one of --user-env/--user-arn/--user-ssm (or -u) and of --pass/--pass-env/--pass-arn/--pass-ssm.\n" +
+	"--credential NAME uses a credential set (see mrsh credentials); fields set on the host win.\n\n" +
+	ssmFlagsHelp
+
+const ssmFlagsHelp = "--pass-ssm stores a password in AWS SSM Parameter Store (SecureString, AWS-managed key)\n" +
+	"and references it by ARN. The password is read from a hidden prompt, or from stdin when\n" +
+	"piped, never from a flag. --user-ssm does the same for the user (its value from -u or a\n" +
+	"prompt). Without a name they use <ssm_prefix>/<creds|hosts>/<name>/<user|pass>, with\n" +
+	"ssm_prefix from defaults (default /mrsh); --pass-ssm=/other/name picks another. An existing\n" +
+	"parameter is only replaced with --overwrite."
 
 // secretFlags are the user/pass variant flags shared by hosts add/update
 // and credentials set. The literal user comes from the global -u.
 type secretFlags struct {
-	userEnv string
-	userARN string
-	pass    string
-	passEnv string
-	passARN string
+	userEnv   string
+	userARN   string
+	userSSM   string
+	pass      string
+	passEnv   string
+	passARN   string
+	passSSM   string
+	overwrite bool
+
+	userSSMARN, passSSMARN string        // set by store
+	stored                 []string      // "--pass-arn ARN" for each stored secret
+	in                     *bufio.Reader // stdin, shared by prompts
 }
 
 func (f *secretFlags) register(cmd *cobra.Command) {
@@ -34,14 +49,23 @@ func (f *secretFlags) register(cmd *cobra.Command) {
 	fl.StringVar(&f.pass, "pass", "", "literal password (visible in shell history; prefer --pass-env or --pass-arn)")
 	fl.StringVar(&f.passEnv, "pass-env", "", "read the password from this environment variable")
 	fl.StringVar(&f.passARN, "pass-arn", "", "read the password from this SSM or Secrets Manager ARN")
-	cmd.MarkFlagsMutuallyExclusive("pass", "pass-env", "pass-arn")
+	fl.StringVar(&f.userSSM, "user-ssm", "", "store the user in SSM (default name, or =/NAME) and reference it")
+	fl.StringVar(&f.passSSM, "pass-ssm", "", "store a password, read from a hidden prompt or stdin, in SSM (default name, or =/NAME) and reference it")
+	fl.Lookup("user-ssm").NoOptDefVal = ssmDefault
+	fl.Lookup("pass-ssm").NoOptDefVal = ssmDefault
+	fl.BoolVar(&f.overwrite, "overwrite", false, "replace an existing SSM parameter (with --user-ssm/--pass-ssm)")
+	cmd.MarkFlagsMutuallyExclusive("pass", "pass-env", "pass-arn", "pass-ssm")
+	cmd.MarkFlagsMutuallyExclusive("user-env", "user-arn", "user-ssm")
 }
 
 // apply copies supplied user/pass flags onto c; a supplied variant replaces
 // that whole field-group. It reports whether anything changed.
 func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.Credentials) (bool, error) {
 	changed := false
-	userFlags := map[string]string{"user": opts.user, "user-env": f.userEnv, "user-arn": f.userARN}
+	userFlags := map[string]string{"user": opts.user, "user-env": f.userEnv, "user-arn": f.userARN, "user-ssm": f.userSSMARN}
+	if cmd.Flags().Changed("user-ssm") {
+		delete(userFlags, "user") // -u was the value stored in SSM
+	}
 	if name, v, ok, err := oneOf(cmd, userFlags); err != nil {
 		return false, err
 	} else if ok {
@@ -51,12 +75,12 @@ func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.C
 			c.User = v
 		case "user-env":
 			c.UserEnv = v
-		case "user-arn":
+		case "user-arn", "user-ssm":
 			c.UserARN = v
 		}
 		changed = true
 	}
-	passFlags := map[string]string{"pass": f.pass, "pass-env": f.passEnv, "pass-arn": f.passARN}
+	passFlags := map[string]string{"pass": f.pass, "pass-env": f.passEnv, "pass-arn": f.passARN, "pass-ssm": f.passSSMARN}
 	if name, v, ok, err := oneOf(cmd, passFlags); err != nil {
 		return false, err
 	} else if ok {
@@ -69,7 +93,7 @@ func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.C
 			c.Pass = v
 		case "pass-env":
 			c.PassEnv = v
-		case "pass-arn":
+		case "pass-arn", "pass-ssm":
 			c.PassARN = v
 		}
 		changed = true
@@ -152,6 +176,20 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 			if !cmd.Flags().Changed("host") {
 				return errors.New("hosts add needs the address: -H/--host ADDRESS")
 			}
+			if f.wantsSSM(cmd) {
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				if _, exists := findHost(lc.cfg, f.name); exists {
+					return fmt.Errorf("host %s already exists (use hosts update)", f.name)
+				}
+				if err := f.store(cmd, opts, lc.cfg, config.OwnerHost, f.name); err != nil {
+					return err
+				}
+			} else if err := f.store(cmd, opts, nil, "", ""); err != nil {
+				return err
+			}
 			h := config.Host{Name: f.name}
 			if _, err := f.apply(cmd, opts, &h); err != nil {
 				return err
@@ -164,7 +202,7 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 				return d.AddHost(h)
 			})
 			if err != nil {
-				return err
+				return f.storedNote(err)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "added host %s to %s\n", h.Name, store.Location())
 			return err
@@ -185,6 +223,20 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.wantsSSM(cmd) {
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				if _, ok := findHost(lc.cfg, f.name); !ok {
+					return fmt.Errorf("%w: %s", config.ErrHostNotFound, f.name)
+				}
+				if err := f.store(cmd, opts, lc.cfg, config.OwnerHost, f.name); err != nil {
+					return err
+				}
+			} else if err := f.store(cmd, opts, nil, "", ""); err != nil {
+				return err
+			}
 			store, err := openStore(opts)
 			if err != nil {
 				return err
@@ -204,7 +256,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 				return d.ReplaceHost(f.name, h)
 			})
 			if err != nil {
-				return err
+				return f.storedNote(err)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "updated host %s in %s\n", f.name, store.Location())
 			return err
@@ -217,6 +269,7 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 
 func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 	var name string
+	var deleteSecret bool
 	cmd := &cobra.Command{
 		Use:     "remove --name NAME",
 		Aliases: []string{"r", "rm"},
@@ -228,14 +281,24 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			asked := false
+			var cfgAfter *config.Config
+			var del, kept []string
 			err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
 				h, ok := findHost(cfg, name)
 				if !ok {
 					return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
 				}
+				del, kept, cfgAfter = nil, nil, cfg
+				also := ""
+				if deleteSecret {
+					del, kept = plannedDeletes(cfg, h.Credentials, "host "+h.Name)
+					if len(del) > 0 {
+						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
+					}
+				}
 				if !opts.yes && !asked {
 					asked = true
-					if err := confirm(cmd, fmt.Sprintf("Remove host %s (%s) from %s? [y/N]: ", h.Name, h.Host, store.Location())); err != nil {
+					if err := confirm(cmd, fmt.Sprintf("Remove host %s (%s) from %s%s? [y/N]: ", h.Name, h.Host, store.Location(), also)); err != nil {
 						return err
 					}
 				}
@@ -244,11 +307,14 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed host %s from %s\n", name, store.Location())
-			return err
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "removed host %s from %s\n", name, store.Location()); err != nil {
+				return err
+			}
+			return deleteSecrets(cmd, cfgAfter, del, kept)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "host name to remove")
+	cmd.Flags().BoolVar(&deleteSecret, "delete-secret", false, "also delete the host's own SSM parameters under ssm_prefix that nothing else uses")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd

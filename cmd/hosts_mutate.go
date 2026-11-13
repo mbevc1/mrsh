@@ -37,6 +37,7 @@ type secretFlags struct {
 	passSSM   string
 	overwrite bool
 	rotate    bool
+	warned    bool // the --pass warning was given; bulk edits apply flags per host
 
 	userSSMARN, passSSMARN string        // set by store
 	stored                 []string      // "--pass-arn ARN" for each stored secret
@@ -91,7 +92,8 @@ func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.C
 	if name, v, ok, err := oneOf(cmd, passFlags); err != nil {
 		return false, err
 	} else if ok {
-		if name == "pass" {
+		if name == "pass" && !f.warned {
+			f.warned = true
 			slog.Warn("--pass stores the password in the config in the clear; prefer --pass-env or --pass-arn")
 		}
 		c.Pass, c.PassEnv, c.PassARN = "", "", ""
@@ -114,17 +116,27 @@ func (f *secretFlags) apply(cmd *cobra.Command, opts *globalOptions, c *config.C
 type hostFlags struct {
 	secretFlags
 	name       string
+	names      []string // hosts update: several --name values
+	inGroups   []string // hosts update: --in-group
 	port       int
 	credential string
 }
 
-func (f *hostFlags) register(cmd *cobra.Command, opts *globalOptions) {
+// register adds the host flags; with many, --name takes several hosts and
+// --in-group selects whole groups (hosts update).
+func (f *hostFlags) register(cmd *cobra.Command, opts *globalOptions, many bool) {
 	fl := cmd.Flags()
-	fl.StringVar(&f.name, "name", "", "host name (unique key)")
+	if many {
+		fl.StringSliceVar(&f.names, "name", nil, "host to update; repeat or comma-separate for several")
+		fl.StringSliceVar(&f.inGroups, "in-group", nil, "update every host in this group; repeat or comma-separate for several")
+		_ = cmd.RegisterFlagCompletionFunc("in-group", completeGroups(opts))
+	} else {
+		fl.StringVar(&f.name, "name", "", "host name (unique key)")
+		_ = cmd.MarkFlagRequired("name")
+	}
 	fl.IntVar(&f.port, "port", 0, "SSH port (0 = use defaults)")
 	fl.StringVar(&f.credential, "credential", "", "use this credential set; its user, pass and key apply where the host sets none (\"\" to clear)")
 	f.secretFlags.register(cmd)
-	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("credential", completeCredentials(opts))
 }
 
@@ -215,21 +227,32 @@ func newHostsAddCmd(opts *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	f.register(cmd, opts)
+	f.register(cmd, opts, false)
 	return cmd
 }
 
 func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 	var f hostFlags
 	cmd := &cobra.Command{
-		Use:     "update --name NAME [flags]",
+		Use:     "update {--name NAME[,NAME...] | --in-group GROUP} [flags]",
 		Aliases: []string{"u", "up"},
-		Short:   "Update fields of a host entry (only the flags given)",
-		Long: "Update fields of the host named by --name; only the flags given change.\n" +
-			"A new user or pass variant replaces the old one.\n\n" + sharedFlagsHelp + rotateFlagsHelp,
-		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03",
-		Args:    cobra.NoArgs,
+		Short:   "Update fields of one or more host entries (only the flags given)",
+		Long: "Update fields of the hosts named by --name, or of every host in --in-group; only the flags\n" +
+			"given change, on each of them. A new user or pass variant replaces the old one.\n" +
+			"Several hosts are listed for confirmation first (unless -y). -H, --pass-ssm/--user-ssm\n" +
+			"and --rotate-pass apply to one host at a time.\n\n" + sharedFlagsHelp + rotateFlagsHelp,
+		Example: "  mrsh hosts update --name web03 -g db --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/web03\n" +
+			"  mrsh hosts update --name rb01,rb02 --credential routers\n" +
+			"  mrsh hosts update --in-group lab -g staging --port 2222",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			switch {
+			case len(f.names) == 0 && len(f.inGroups) == 0:
+				return errors.New("hosts update needs --name NAME (repeat for several) or --in-group GROUP")
+			case len(f.names) != 1 || len(f.inGroups) > 0:
+				return f.updateMany(cmd, opts)
+			}
+			f.name = f.names[0]
 			if f.rotate {
 				if err := checkRotateOnly(cmd); err != nil {
 					return err
@@ -283,61 +306,182 @@ func newHostsUpdateCmd(opts *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	f.register(cmd, opts)
+	f.register(cmd, opts, true)
 	f.registerRotate(cmd)
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }
 
+// updateMany applies the same field flags to several hosts in one config
+// write, after listing them for confirmation.
+func (f *hostFlags) updateMany(cmd *cobra.Command, opts *globalOptions) error {
+	fl := cmd.Flags()
+	switch {
+	case f.rotate:
+		return errors.New("--rotate-pass works on one host at a time; hosts that share a password rotate through their credential set")
+	case f.wantsSSM(cmd):
+		return errors.New("--pass-ssm/--user-ssm store one host's secret; for several hosts, store it in a credential set (credentials set --pass-ssm) and point them at it with --credential")
+	case fl.Changed("host"):
+		return errors.New("-H/--host sets one host's address; update several hosts' other fields only")
+	}
+	if err := f.store(cmd, opts, nil, "", ""); err != nil { // refuses a stray --overwrite
+		return err
+	}
+	if changed, err := f.apply(cmd, opts, &config.Host{}); err != nil {
+		return err
+	} else if !changed {
+		return errors.New("nothing to update: pass at least one field flag")
+	}
+	store, err := openStore(opts)
+	if err != nil {
+		return err
+	}
+	asked := false
+	var names []string
+	err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
+		var err error
+		if names, err = selectHosts(cfg, f.names, f.inGroups); err != nil {
+			return err
+		}
+		if !opts.yes && !asked {
+			asked = true
+			if err := confirmHosts(cmd, fmt.Sprintf("About to update %d host(s)", len(names)), cfg, names); err != nil {
+				return err
+			}
+		}
+		for _, name := range names {
+			h, _ := findHost(cfg, name)
+			if _, err := f.apply(cmd, opts, &h); err != nil {
+				return err
+			}
+			if err := d.ReplaceHost(name, h); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "updated %d host(s) in %s: %s\n", len(names), store.Location(), strings.Join(names, ", "))
+	return err
+}
+
+// selectHosts resolves --name values and groups to host names, in config
+// order without repeats. An unknown name is an error, as is a group with
+// no hosts.
+func selectHosts(cfg *config.Config, names, groups []string) ([]string, error) {
+	want := map[string]bool{}
+	for _, n := range names {
+		if _, ok := findHost(cfg, n); !ok {
+			return nil, fmt.Errorf("%w: %s", config.ErrHostNotFound, n)
+		}
+		want[n] = true
+	}
+	for _, g := range groups {
+		found := false
+		for _, h := range cfg.Hosts {
+			if h.Group == g {
+				want[h.Name], found = true, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("no hosts in group %s", g)
+		}
+	}
+	var out []string
+	for _, h := range cfg.Hosts {
+		if want[h.Name] {
+			out = append(out, h.Name)
+		}
+	}
+	return out, nil
+}
+
+// confirmHosts lists hosts on stderr under intro and asks before acting.
+func confirmHosts(cmd *cobra.Command, intro string, cfg *config.Config, names []string) error {
+	w := cmd.ErrOrStderr()
+	_, _ = fmt.Fprintln(w, intro+":")
+	for _, n := range names {
+		h, _ := findHost(cfg, n)
+		_, _ = fmt.Fprintf(w, "  %s (%s)\n", h.Name, h.Host)
+	}
+	return confirm(cmd, "Continue? [y/N]: ")
+}
+
 func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
-	var name string
+	var names []string
 	var deleteSecret bool
 	cmd := &cobra.Command{
-		Use:     "remove --name NAME",
+		Use:     "remove {--name NAME[,NAME...] | -g GROUP}",
 		Aliases: []string{"r", "rm"},
-		Short:   "Remove a host entry (asks for confirmation unless -y/--assume-yes)",
+		Short:   "Remove one or more host entries (asks for confirmation unless -y/--assume-yes)",
+		Long: "Remove the hosts named by --name (repeat or comma-separate for several), or every host in\n" +
+			"the group given with -g, or both.",
+		Example: "  mrsh hosts remove --name rb02\n  mrsh hosts remove --name rb02,rb03 --delete-secret\n  mrsh -g lab hosts remove",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			var groups []string
+			if cmd.Flags().Changed("group") {
+				groups = []string{opts.group}
+			}
+			if len(names) == 0 && len(groups) == 0 {
+				return errors.New("hosts remove needs --name NAME (repeat for several) or -g GROUP")
+			}
 			store, err := openStore(opts)
 			if err != nil {
 				return err
 			}
 			asked := false
 			var cfgAfter *config.Config
-			var del, kept []string
+			var del, kept, gone []string
 			err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
-				h, ok := findHost(cfg, name)
-				if !ok {
-					return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
+				var err error
+				if gone, err = selectHosts(cfg, names, groups); err != nil {
+					return err
 				}
 				del, kept, cfgAfter = nil, nil, cfg
 				also := ""
 				if deleteSecret {
-					del, kept = cfg.SecretDeletes(h.Credentials, "host "+h.Name)
+					del, kept = cfg.HostSecretDeletes(gone)
 					if len(del) > 0 {
 						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
 					}
 				}
 				if !opts.yes && !asked {
 					asked = true
-					if err := confirm(cmd, fmt.Sprintf("Remove host %s (%s) from %s%s? [y/N]: ", h.Name, h.Host, store.Location(), also)); err != nil {
+					if len(gone) == 1 && len(groups) == 0 {
+						h, _ := findHost(cfg, gone[0])
+						err = confirm(cmd, fmt.Sprintf("Remove host %s (%s) from %s%s? [y/N]: ", h.Name, h.Host, store.Location(), also))
+					} else {
+						err = confirmHosts(cmd, fmt.Sprintf("About to remove %d host(s) from %s%s", len(gone), store.Location(), also), cfg, gone)
+					}
+					if err != nil {
 						return err
 					}
 				}
-				return d.RemoveHost(name)
+				for _, n := range gone {
+					if err := d.RemoveHost(n); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 			if err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "removed host %s from %s\n", name, store.Location()); err != nil {
+			what := "host " + gone[0]
+			if len(gone) > 1 {
+				what = fmt.Sprintf("%d hosts (%s)", len(gone), strings.Join(gone, ", "))
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "removed %s from %s\n", what, store.Location()); err != nil {
 				return err
 			}
 			return deleteSecrets(cmd, cfgAfter, del, kept)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "host name to remove")
-	cmd.Flags().BoolVar(&deleteSecret, "delete-secret", false, "also delete the host's own SSM parameters under ssm_prefix that nothing else uses")
-	_ = cmd.MarkFlagRequired("name")
+	cmd.Flags().StringSliceVar(&names, "name", nil, "host to remove; repeat or comma-separate for several")
+	cmd.Flags().BoolVar(&deleteSecret, "delete-secret", false, "also delete the hosts' own SSM parameters under ssm_prefix that nothing else uses")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeNames(opts))
 	return cmd
 }

@@ -16,7 +16,7 @@ const token = (() => {
 const $ = (sel, root = document) => root.querySelector(sel);
 // picked: hosts ticked for upgrade (opt-in, as upgrades reboot devices);
 // testSkipped: hosts unticked for testing (opt-out, so all are tested by default).
-const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set(), rotating: false }; // tests: name -> {ok, detail, ms} or {running}
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set(), hostPicked: new Set(), rotating: false }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -283,6 +283,7 @@ function render() {
   for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
   for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
   for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
+  for (const n of state.hostPicked) if (!names.has(n)) state.hostPicked.delete(n);
   for (const n of state.testSkipped) if (!names.has(n)) state.testSkipped.delete(n);
 
   renderCredentials(); // first: fills the credential dropdowns the editors read
@@ -466,18 +467,30 @@ function renderTests() {
   syncSelection($("#test-all"), $("#test-count"), [$("#test-run")], selectedTests().length, names.size);
 }
 
-function renderHosts() {
+// shownHosts is the Hosts tab's rows under its search and group filter.
+function shownHosts() {
   const q = $("#search").value.trim().toLowerCase();
   const group = $("#group-filter").value;
-  const rows = state.cfg.hosts.filter((h) =>
+  return state.cfg.hosts.filter((h) =>
     (!group || h.group === group) &&
     (!q || [h.name, h.host, h.group].some((v) => v.toLowerCase().includes(q))));
+}
+
+// pickedHosts is what the bulk buttons act on: ticked hosts still shown.
+const pickedHosts = () => shownHosts().filter((h) => state.hostPicked.has(h.name));
+
+function renderHosts() {
+  const rows = shownHosts();
 
   const tbody = $("#hosts");
   tbody.replaceChildren();
   for (const h of rows) {
     const tr = document.createElement("tr");
     tr.append(
+      pickCell(h.name, state.hostPicked.has(h.name), (on) => {
+        if (on) state.hostPicked.add(h.name); else state.hostPicked.delete(h.name);
+        renderHosts();
+      }),
       cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
       // Unset fields come from the host's credential set (shown as "set: NAME"), else Defaults.
@@ -505,6 +518,7 @@ function renderHosts() {
     tbody.append(tr);
   }
   $("#count").textContent = `${rows.length} of ${state.cfg.hosts.length} hosts`;
+  syncSelection($("#hosts-all"), $("#hosts-picked"), [$("#bulk-edit"), $("#bulk-delete")], pickedHosts().length, rows.length);
   $("#empty").hidden = state.cfg.hosts.length > 0;
 }
 
@@ -648,6 +662,80 @@ function removedNote(what, reply) {
   if (rep.errors.length) banner(`Removed ${what}, but deleting from SSM failed: ${rep.errors.join("; ")}`);
   const kept = rep.kept.length ? ` (kept ${rep.kept.length}: ${rep.kept.join("; ")})` : "";
   return `Removed ${what}; deleted ${rep.deleted.length} SSM parameter(s)${kept}`;
+}
+
+// openBulkEditor starts every field as "leave as is" (unticked, disabled).
+function openBulkEditor() {
+  const hosts = pickedHosts();
+  if (!hosts.length) return;
+  const form = $("#bulk-form");
+  form.reset();
+  for (const box of form.querySelectorAll("[data-change]")) setChange(box, false);
+  fillSecret($('#bulk-form [data-secret="user"]'), { kind: "unset" });
+  fillSecret($('#bulk-form [data-secret="pass"]'), { kind: "unset" });
+  $("#bulk-title").textContent = `Edit ${hosts.length} host${hosts.length === 1 ? "" : "s"}`;
+  $("#bulk-hosts").textContent = hosts.map((h) => h.name).join(", ");
+  $("#bulk-errors").replaceChildren();
+  $("#bulk-editor").showModal();
+}
+
+// setChange ticks or unticks a bulk field and enables its control to match.
+function setChange(box, on) {
+  box.checked = on;
+  const target = box.closest(".bulk-field").querySelector("input:not([data-change]), select, fieldset");
+  target.disabled = !on;
+  return target;
+}
+
+async function saveBulk(ev) {
+  ev.preventDefault();
+  const hosts = pickedHosts().map((h) => h.name);
+  const f = $("#bulk-form").elements;
+  const changes = {};
+  for (const box of $("#bulk-form").querySelectorAll("[data-change]:checked")) {
+    const k = box.dataset.change;
+    if (k === "user" || k === "pass") changes[k] = readSecret($(`#bulk-form [data-secret="${k}"]`));
+    else if (k === "port") changes.port = Number(f.port.value) || 0;
+    else changes[k] = f[k].value.trim();
+  }
+  if (!Object.keys(changes).length) {
+    showErrors($("#bulk-errors"), new Error("Tick at least one field to change."));
+    return;
+  }
+  await busy($("#bulk-save"), "Saving…", async () => {
+    try {
+      await api("POST", "/api/hosts/bulk-edit", { hosts, changes });
+      $("#bulk-editor").close();
+      for (const n of hosts) delete state.tests[n]; // earlier results no longer describe them
+      await load();
+      toast(`Updated ${hosts.length} host${hosts.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      if (await onConflict(err)) { $("#bulk-editor").close(); return; }
+      showErrors($("#bulk-errors"), err);
+    }
+  });
+}
+
+async function removeHosts() {
+  const hosts = pickedHosts();
+  if (!hosts.length) return;
+  const names = hosts.map((h) => h.name);
+  const n = hosts.length, own = hosts.some((h) => ownSSM(h) > 0);
+  const answer = await askConfirm({
+    title: `Remove ${n} host${n === 1 ? "" : "s"}?`, text: `${names.join(", ")} ${n === 1 ? "is" : "are"} removed from the config.`, ok: "Remove",
+    option: own ? "Also delete their SSM parameters (only ones under the SSM prefix that nothing left uses)" : "",
+  });
+  if (!answer.ok) return;
+  await busy($("#bulk-delete"), "Removing…", async () => {
+    try {
+      const reply = await api("POST", "/api/hosts/bulk-delete", { hosts: names, delete_secret: answer.checked });
+      for (const name of names) state.hostPicked.delete(name);
+      await load();
+      toast(removedNote(n === 1 ? names[0] : `${n} hosts`, reply));
+    } catch (err) {
+      if (!(await onConflict(err))) banner(`Could not remove ${n === 1 ? names[0] : `${n} hosts`}: ${err.message}`);
+    }
+  });
 }
 
 async function removeHost(h, btn) {
@@ -968,6 +1056,22 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTests();
   });
   $("#test-run").addEventListener("click", () => runTests(selectedTests(), $("#test-run")));
+  $("#hosts-all").addEventListener("change", (e) => {
+    for (const h of shownHosts()) if (e.target.checked) state.hostPicked.add(h.name); else state.hostPicked.delete(h.name);
+    renderHosts();
+  });
+  $("#bulk-edit").addEventListener("click", openBulkEditor);
+  $("#bulk-delete").addEventListener("click", removeHosts);
+  $("#bulk-cancel").addEventListener("click", () => $("#bulk-editor").close());
+  $("#bulk-form").addEventListener("submit", saveBulk);
+  for (const box of document.querySelectorAll("#bulk-form [data-change]")) {
+    box.addEventListener("change", () => {
+      const t = setChange(box, box.checked);
+      if (box.checked) { $("#bulk-errors").replaceChildren(); (t.querySelector?.("select") || t).focus(); }
+    });
+  }
+  // Storing in SSM is one host at a time; shared passwords belong in a credential set.
+  for (const opt of document.querySelectorAll('#bulk-form option[value="ssm"]')) opt.remove();
   // The rotation's outcome must be seen; Esc does not close it while it runs.
   $("#rotate-dialog").addEventListener("cancel", (e) => { if (state.rotating) e.preventDefault(); });
   $("#rotate-dialog").addEventListener("close", () => { $("#rotate-password").textContent = ""; $("#rotate-secret").hidden = true; });

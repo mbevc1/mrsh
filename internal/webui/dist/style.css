@@ -81,7 +81,12 @@ td.actions > button.placeholder { visibility: hidden; } /* keeps the column's sl
 .test-table { table-layout: fixed; min-width: 760px; }
 .test-table td { overflow: hidden; text-overflow: ellipsis; }
 .test-table th.time { width: 90px; }
-.test-table th.check { width: 44px; }
+.test-table th.check, #tab-hosts th.check { width: 44px; }
+.bulk-field { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.bulk-field > label.check { gap: 6px; font-size: 12px; color: var(--muted); }
+.bulk-field > input, .bulk-field > select { color: var(--text); font-size: 14px; }
+.bulk-field fieldset.secret legend { display: none; } /* the tick box names it */
+#bulk-form p.hint { margin: 0; }
 /* Results carry the most text (versions, steps, errors), so the Test and
    Upgrade tables give them 40% and scroll sideways on narrow screens rather
    than squeezing the name, host and group columns to nothing. */
@@ -144,5 +149,7 @@ code { font-family: var(--mono); font-size: 12px; }
   .grid-form { grid-template-columns: minmax(0, 1fr); }
   .grid-form label, .grid-form fieldset { min-width: 0; }
   .grid-form label input, .grid-form label select, .grid-form fieldset input, .grid-form fieldset select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .grid-form input[type=checkbox] { width: auto; flex: none; } /* a stretched box pushes its label aside */
+  .bulk-field > input, .bulk-field > select { width: 100%; min-width: 0; box-sizing: border-box; }
   header { flex-wrap: wrap; }
 }

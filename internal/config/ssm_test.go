@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -113,5 +114,30 @@ func TestPassSource(t *testing.T) {
 	}
 	if n, ok := SSMParamName("arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/hosts/a/pass"); !ok || n != "/mrsh/hosts/a/pass" {
 		t.Errorf("SSMParamName = %q, %v", n, ok)
+	}
+}
+
+func TestHostSecretDeletes(t *testing.T) {
+	arn := func(n string) string { return "arn:aws:ssm:eu-west-1:123456789012:parameter" + n }
+	c := &Config{
+		Credentials: map[string]CredentialSet{"lab": {Credentials: Credentials{PassARN: arn("/mrsh/creds/lab/pass")}}},
+		Hosts: []Host{
+			{Name: "a", Credentials: Credentials{PassARN: arn("/mrsh/shared")}},
+			{Name: "b", Credentials: Credentials{PassARN: arn("/mrsh/shared"), UserARN: arn("/mrsh/hosts/b/user")}},
+			{Name: "c", Credentials: Credentials{PassARN: arn("/mrsh/creds/lab/pass")}},
+			{Name: "d", Credentials: Credentials{PassARN: arn("/elsewhere/d")}},
+		},
+	}
+	// Removed together, a and b take their shared parameter with them.
+	del, kept := c.HostSecretDeletes([]string{"a", "b", "c", "d"})
+	if fmt.Sprint(del) != "["+arn("/mrsh/shared")+" "+arn("/mrsh/hosts/b/user")+"]" {
+		t.Errorf("del = %v", del)
+	}
+	if len(kept) != 2 || !strings.Contains(kept[0], "still used by credential lab") || !strings.Contains(kept[1], "not under /mrsh") {
+		t.Errorf("kept = %v", kept)
+	}
+	// Alone, a leaves it for b.
+	if del, kept := c.HostSecretDeletes([]string{"a"}); len(del) != 0 || !strings.Contains(fmt.Sprint(kept), "still used by host b") {
+		t.Errorf("a alone: %v %v", del, kept)
 	}
 }

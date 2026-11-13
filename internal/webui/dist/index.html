@@ -45,11 +45,14 @@
       <input id="search" type="search" placeholder="Search name, host or group" aria-label="Search hosts">
       <select id="group-filter" aria-label="Filter by group"><option value="">All groups</option></select>
       <span class="count" id="count"></span>
+      <span class="count" id="hosts-picked"></span>
+      <button id="bulk-edit" type="button" class="ghost" disabled>Edit selected</button>
+      <button id="bulk-delete" type="button" class="ghost danger" data-busy="Removing…" disabled>Delete selected</button>
       <button id="add" type="button">Add host</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th></th></tr></thead>
+        <thead><tr><th class="check"><input type="checkbox" id="hosts-all" aria-label="Select all shown hosts"></th><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th></th></tr></thead>
         <tbody id="hosts"></tbody>
       </table>
     </div>
@@ -163,6 +166,26 @@
     <div class="actions wide">
       <button type="button" class="ghost" id="cancel">Cancel</button>
       <button type="submit" id="save" data-busy="Saving…">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="bulk-editor">
+  <form id="bulk-form" class="grid-form" method="dialog">
+    <h2 id="bulk-title">Edit hosts</h2>
+    <p class="hint wide" id="bulk-hosts"></p>
+    <p class="hint wide">Tick a field to set it on every selected host; the others stay as they are. An empty value clears the field.</p>
+    <div class="bulk-field"><label class="check"><input type="checkbox" data-change="group"> Group</label><input name="group" list="groups" autocomplete="off" disabled></div>
+    <div class="bulk-field"><label class="check"><input type="checkbox" data-change="port"> Port</label><input name="port" type="number" min="0" max="65535" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="credential"> Credential set</label>
+      <select name="credential" class="cred-select" disabled><option value="">None (use Defaults)</option></select></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="identity_file"> Identity file</label><input name="identity_file" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="known_hosts"> known_hosts</label><input name="known_hosts" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="user"> User</label><fieldset class="secret" data-secret="user" disabled></fieldset></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="pass"> Password</label><fieldset class="secret" data-secret="pass" disabled></fieldset></div>
+    <ul class="errors wide" id="bulk-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="bulk-cancel">Cancel</button>
+      <button type="submit" id="bulk-save" data-busy="Saving…">Save</button>
     </div>
   </form>
 </dialog>

@@ -131,6 +131,41 @@ func (c *Config) SecretDeletes(cr Credentials, who string) (del, kept []string) 
 	return del, kept
 }
 
+// HostSecretDeletes plans the SSM parameters to delete when the named
+// hosts are removed together: SecretDeletes for each, judged against the
+// config without any of them, so a parameter only they share is deleted.
+func (c *Config) HostSecretDeletes(names []string) (del, kept []string) {
+	gone := map[string]bool{}
+	for _, n := range names {
+		gone[n] = true
+	}
+	rest := *c
+	rest.Hosts = nil
+	var removed []Host
+	for _, h := range c.Hosts {
+		if gone[h.Name] {
+			removed = append(removed, h)
+		} else {
+			rest.Hosts = append(rest.Hosts, h)
+		}
+	}
+	seen := map[string]bool{}
+	add := func(list *[]string, xs []string) {
+		for _, x := range xs {
+			if !seen[x] {
+				seen[x] = true
+				*list = append(*list, x)
+			}
+		}
+	}
+	for _, h := range removed {
+		d, k := rest.SecretDeletes(h.Credentials, "host "+h.Name)
+		add(&del, d)
+		add(&kept, k)
+	}
+	return del, kept
+}
+
 // PassSource names where Effective takes h's password from: "host NAME",
 // "credential NAME" (the host's set or the defaults' set), "defaults", or
 // "" when nothing sets one.

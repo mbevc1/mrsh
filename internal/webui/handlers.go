@@ -279,16 +279,18 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/hosts/{name}", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		name := r.PathValue("name")
 		if r.URL.Query().Get("delete_secret") == "1" {
-			h, ok := find(cfg, name)
-			if !ok {
+			if _, ok := find(cfg, name); !ok {
 				return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
 			}
-			if err := s.deleteSecretsAfterSave(r, cfg, h.Credentials, "host "+name); err != nil {
+			del, kept := cfg.HostSecretDeletes([]string{name})
+			if err := s.deleteSecretsAfterSave(r, cfg, del, kept); err != nil {
 				return err
 			}
 		}
 		return d.RemoveHost(name)
 	}))
+	mux.HandleFunc("POST /api/hosts/bulk-edit", s.mutate(s.bulkEditHosts))
+	mux.HandleFunc("POST /api/hosts/bulk-delete", s.mutate(s.bulkDeleteHosts))
 	mux.HandleFunc("PUT /api/defaults", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v DefaultsView
 		if err := decode(r, &v); err != nil {
@@ -384,7 +386,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 			return &config.ValidationError{Err: fmt.Errorf("credential %s is used by %s; point them at another set first", name, strings.Join(used, ", "))}
 		}
 		if set, ok := cfg.Credentials[name]; ok && r.URL.Query().Get("delete_secret") == "1" {
-			if err := s.deleteSecretsAfterSave(r, cfg, set.Credentials, "credential "+name); err != nil {
+			del, kept := cfg.SecretDeletes(set.Credentials, "credential "+name)
+			if err := s.deleteSecretsAfterSave(r, cfg, del, kept); err != nil {
 				return err
 			}
 		}

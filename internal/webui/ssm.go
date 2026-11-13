@@ -95,11 +95,10 @@ type SecretsReport struct {
 	Errors  []string `json:"errors"`
 }
 
-// deleteSecretsAfterSave plans which of an entry's SSM parameters a removal
-// deletes (config.SecretDeletes) and deletes them once the removal is saved,
+// deleteSecretsAfterSave deletes the SSM parameters a removal planned
+// (config.SecretDeletes or HostSecretDeletes) once the removal is saved,
 // never before.
-func (s *Server) deleteSecretsAfterSave(r *http.Request, cfg *config.Config, c config.Credentials, who string) error {
-	del, kept := cfg.SecretDeletes(c, who)
+func (s *Server) deleteSecretsAfterSave(r *http.Request, cfg *config.Config, del, kept []string) error {
 	if len(del) > 0 && s.Secrets == nil {
 		return &config.ValidationError{Err: errors.New("deleting SSM parameters is not available")}
 	}

@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -150,5 +151,87 @@ func TestRemoveDeletesSSMParameters(t *testing.T) {
 	}
 	if code, out := mut("DELETE", "/api/credentials/lab?delete_secret=1", ""); code != 200 || mem.params["/mrsh/creds/lab/pass"] != "" {
 		t.Fatalf("credential delete: %d %v", code, out)
+	}
+}
+
+func TestRotateRoutes(t *testing.T) {
+	f := newFixture(t)
+	if w, _ := f.do("POST", "/api/rotate/plan", `{"kind":"credential","name":"lab"}`); w.Code != http.StatusNotImplemented {
+		t.Errorf("no rotator: %d", w.Code)
+	}
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var applied []string
+	f.srv.Rotate = &Rotator{
+		Plan: func(_ context.Context, kind, name string) (RotatePlan, error) {
+			if name == "ghost" {
+				return RotatePlan{}, fmt.Errorf("%w: ghost", config.ErrCredentialNotFound)
+			}
+			return RotatePlan{Label: kind + " " + name, Hosts: []string{"rt1"}, Dest: "/mrsh/creds/lab/pass", InPlace: true}, nil
+		},
+		Apply: func(ctx context.Context, kind, name string, progress func(RotateResult)) (RotateOutcome, error) {
+			switch name {
+			case "ghost":
+				return RotateOutcome{}, fmt.Errorf("%w: ghost", config.ErrHostNotFound)
+			case "slow":
+				started <- struct{}{}
+				<-release
+			}
+			if ctx.Done() != nil {
+				t.Error("a rotation must not stop when the page goes away")
+			}
+			applied = append(applied, kind+" "+name)
+			if progress != nil {
+				progress(RotateResult{Name: "rt1", OK: true, Running: true, Summary: "changing the password"})
+			}
+			return RotateOutcome{OK: true, Message: "rotated", Results: []RotateResult{{Name: "rt1", OK: true, Summary: "password changed"}}}, nil
+		},
+	}
+	f.h = f.srv.Handler()
+
+	if w, out := f.do("POST", "/api/rotate/plan", `{"kind":"credential","name":"lab"}`); w.Code != 200 || out["dest"] != "/mrsh/creds/lab/pass" || out["in_place"] != true {
+		t.Errorf("plan: %d %v", w.Code, out)
+	}
+	for _, tc := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/api/rotate/plan", `{"kind":"group","name":"lab"}`, 400},
+		{"/api/rotate/plan", `{"kind":"host"}`, 400},
+		{"/api/rotate/plan", `{"kind":"credential","name":"ghost"}`, 404},
+		{"/api/rotate/apply", `{"kind":"credential","name":"lab"}`, 400},
+		{"/api/rotate/apply", `{"kind":"host","name":"ghost","confirm":true}`, 404},
+		{"/api/rotate/apply", `{"kind":"host","name":"ghost","confirm":true,"stream":true}`, 404},
+	} {
+		if w, _ := f.do("POST", tc.path, tc.body); w.Code != tc.want {
+			t.Errorf("%s %s: %d, want %d", tc.path, tc.body, w.Code, tc.want)
+		}
+	}
+	if len(applied) != 0 {
+		t.Fatalf("refused requests rotated: %v", applied)
+	}
+
+	// Streamed: progress, then the outcome.
+	w, _ := f.do("POST", "/api/rotate/apply", `{"kind":"credential","name":"lab","confirm":true,"stream":true}`)
+	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/x-ndjson" || len(lines) != 2 ||
+		!strings.Contains(lines[0], `"running":true`) || !strings.HasPrefix(lines[1], `{"outcome":{"ok":true`) {
+		t.Errorf("stream: %d %q", w.Code, lines)
+	}
+
+	// One rotation at a time.
+	done := make(chan int, 1)
+	go func() {
+		w, _ := f.do("POST", "/api/rotate/apply", `{"kind":"host","name":"slow","confirm":true}`)
+		done <- w.Code
+	}()
+	<-started
+	if w, _ := f.do("POST", "/api/rotate/apply", `{"kind":"credential","name":"lab","confirm":true}`); w.Code != http.StatusConflict {
+		t.Errorf("concurrent rotation: %d", w.Code)
+	}
+	close(release)
+	if code := <-done; code != 200 || fmt.Sprint(applied) != "[credential lab host slow]" {
+		t.Errorf("first rotation: %d %v", code, applied)
 	}
 }

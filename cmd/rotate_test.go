@@ -182,3 +182,63 @@ func TestRotateIntoSSMAndHostRules(t *testing.T) {
 		t.Error("a failed rotation left a parameter or changed the config")
 	}
 }
+
+func TestUIRotation(t *testing.T) {
+	fake := ssmtest.Start(t)
+	arn := fake.Put("/mrsh/creds/routers/pass", "old")
+	rt1, rt2, own, lit := startPwRouter(t, "old"), startPwRouter(t, "old"), startPwRouter(t, "mine"), startPwRouter(t, "lit")
+	cfg := writeConfig(t, "defaults: {host_key_policy: insecure}\ncredentials:\n  routers: {user: admin, pass_arn: "+arn+"}\nhosts:\n"+
+		hostLine("rt1", rt1, ", credential: routers")+hostLine("rt2", rt2, ", credential: routers")+
+		hostLine("own", own, ", user: admin, pass_arn: "+fake.Put("/ops/own-pass", "mine"))+hostLine("lit", lit, ", user: admin, pass: lit"))
+	post := startUI(t, cfg)
+
+	// The plan names the devices and where the password goes.
+	if code, body := post("/api/rotate/plan", `{"kind":"credential","name":"routers"}`); code != 200 ||
+		!strings.Contains(string(body), `"hosts":["rt1","rt2"],"dest":"/mrsh/creds/routers/pass","in_place":true`) {
+		t.Fatalf("plan: %d %s", code, body)
+	}
+	if code, body := post("/api/rotate/plan", `{"kind":"host","name":"rt1"}`); code != 422 || !strings.Contains(string(body), "uses the password of credential routers") {
+		t.Errorf("inherited: %d %s", code, body)
+	}
+	if code, body := post("/api/rotate/plan", `{"kind":"host","name":"lit"}`); code != 200 || !strings.Contains(string(body), `"dest":"/mrsh/hosts/lit/pass","in_place":false`) {
+		t.Errorf("literal: %d %s", code, body)
+	}
+
+	// Streamed: each device's steps, then the outcome; nothing secret.
+	code, body := post("/api/rotate/apply", `{"kind":"credential","name":"routers","confirm":true,"stream":true}`)
+	newPass := fake.Param("/mrsh/creds/routers/pass").Value
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	last := lines[len(lines)-1]
+	if code != 200 || newPass == "old" || rt1.password() != newPass || rt2.password() != newPass ||
+		!strings.Contains(string(body), `"summary":"changing the password"`) ||
+		!strings.HasPrefix(last, `{"outcome":{"ok":true,"message":"rotated the password of credential routers on 2 device(s)`) {
+		t.Fatalf("apply: %d\n%s", code, body)
+	}
+	if strings.Contains(string(body), newPass) || strings.Contains(string(body), `"old"`) {
+		t.Error("a password reached the page")
+	}
+
+	// A host's own SSM password rotates in place under its own name.
+	if code, body := post("/api/rotate/apply", `{"kind":"host","name":"own","confirm":true}`); code != 200 || !strings.Contains(string(body), `"ok":true`) ||
+		own.password() != fake.Param("/ops/own-pass").Value || own.password() == "mine" {
+		t.Errorf("own: %d %s", code, body)
+	}
+
+	// A literal password moves to SSM and the config follows.
+	if code, body := post("/api/rotate/apply", `{"kind":"host","name":"lit","confirm":true}`); code != 200 || !strings.Contains(string(body), `"ok":true`) {
+		t.Fatalf("literal: %d %s", code, body)
+	}
+	h, _ := findHost(loadCfg(t, cfg), "lit")
+	if h.Pass != "" || h.PassARN != fake.ARN("/mrsh/hosts/lit/pass") || fake.Param("/mrsh/hosts/lit/pass").Value != lit.password() {
+		t.Errorf("after move: %+v lit=%q", h, lit.password())
+	}
+
+	// A failure rolls back and says so; the reply is still 200 with ok false.
+	rt2.allow(0)
+	before := rt1.password()
+	code, body = post("/api/rotate/apply", `{"kind":"credential","name":"routers","confirm":true}`)
+	if code != 200 || !strings.Contains(string(body), `"ok":false`) || !strings.Contains(string(body), "every device is back on the old password") ||
+		!strings.Contains(string(body), "rolled back: another device failed") || rt1.password() != before || fake.Param("/mrsh/creds/routers/pass").Value != before {
+		t.Errorf("rollback: %d %s", code, body)
+	}
+}

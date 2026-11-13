@@ -33,7 +33,8 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 		Short: "Edit the hosts config in a local browser UI",
 		Long: "Starts a loopback-only web editor for the --config source (local or s3://) and opens it.\n" +
 			"It edits config and can act on saved hosts: Test connects (resolving their secrets) and runs\n" +
-			"the read-only RouterOS version check; Upgrade runs the `mt upgrade` step (devices reboot).\n" +
+			"the read-only RouterOS version check; Upgrade runs the `mt upgrade` step (devices reboot);\n" +
+			"Rotate changes a RouterOS password and stores it in SSM, as --rotate-pass does.\n" +
 			"It never runs other commands.\n" +
 			"Stop it with Ctrl-C or the page's Exit button; nothing keeps running afterwards.",
 		Args: cobra.NoArgs,
@@ -50,9 +51,11 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			srv.Test = hostTester(cmd, opts)
+			saved := &savedRunner{cmd: cmd, opts: opts}
+			srv.Test = hostTester(saved)
 			srv.Secrets = newSecretWriter()
-			srv.Upgrade = hostUpgrader(cmd, opts)
+			srv.Upgrade = hostUpgrader(saved)
+			srv.Rotate = hostRotator(saved)
 			url := srv.URL()
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "mrsh ui editing %s\nopen %s\npress Ctrl-C or the Exit button to stop\n", store.Location(), url)
 			if !noOpen {

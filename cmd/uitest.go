@@ -33,7 +33,7 @@ type savedRun struct {
 // savedRunner runs a job on saved hosts for the UI. Each call reloads the
 // config (so defaults edited in the UI apply), accepts exact saved names
 // only, and resolves secrets per host so one missing secret fails only that
-// host.
+// host. The UI's actions share one, since loadConfig writes into opts.
 type savedRunner struct {
 	cmd  *cobra.Command
 	opts *globalOptions
@@ -113,8 +113,7 @@ func (r savedRun) failure() (string, string, bool) {
 // hostTester backs the UI's Test button: connect to each named host and run
 // the RouterOS version check. A host that answers but is not RouterOS still
 // passes as "connected".
-func hostTester(cmd *cobra.Command, opts *globalOptions) webui.Tester {
-	s := &savedRunner{cmd: cmd, opts: opts}
+func hostTester(s *savedRunner) webui.Tester {
 	return func(ctx context.Context, names []string, done func(webui.TestResult)) ([]webui.TestResult, error) {
 		var each func(savedRun)
 		if done != nil {
@@ -152,8 +151,7 @@ func testResult(r savedRun) webui.TestResult {
 // the step runs, or with Dry is only described. With wait it takes every
 // step through the reboots, as `mt upgrade --wait` does. Upgrades use
 // --parallel as the CLI does.
-func hostUpgrader(cmd *cobra.Command, opts *globalOptions) *webui.Upgrader {
-	s := &savedRunner{cmd: cmd, opts: opts}
+func hostUpgrader(s *savedRunner) *webui.Upgrader {
 	run := func(ctx context.Context, names []string, dry, wait bool, progress webui.Progress) ([]webui.UpgradeResult, error) {
 		if progress == nil {
 			progress = func(webui.UpgradeResult) {}

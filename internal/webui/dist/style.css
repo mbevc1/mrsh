@@ -73,7 +73,9 @@ tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--hover); }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
-td.actions { text-align: right; }
+td.actions { text-align: right; white-space: nowrap; }
+td.actions > button + button { margin-left: 8px; }
+td.actions > button.placeholder { visibility: hidden; } /* keeps the column's slot; hidden from screen readers too */
 /* Reserve the status column up front, so a result does not resize the table. */
 /* Fixed layout: column widths come from the header, never from results. */
 .test-table { table-layout: fixed; min-width: 760px; }
@@ -119,7 +121,7 @@ fieldset.secret legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .ssm-row label.check { display: flex; gap: 6px; font-size: 13px; color: var(--muted); }
 .errors { color: var(--danger); margin: 0; padding-left: 18px; }
 .errors:empty { display: none; }
-.actions { display: flex; gap: 8px; justify-content: flex-end; }
+div.actions { display: flex; gap: 8px; justify-content: flex-end; } /* not td: a flex cell drops out of the table */
 dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; width: min(760px, 94vw); }
 dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 dialog.confirm { width: min(460px, 94vw); }
@@ -127,6 +129,11 @@ dialog.confirm form { display: grid; gap: 12px; }
 dialog.confirm h2 { margin: 0; font-size: 16px; }
 dialog.confirm p { margin: 0; color: var(--muted); }
 dialog.confirm label.check { display: flex; gap: 8px; align-items: flex-start; }
+.rotate-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rotate-list li { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 10px; align-items: center; }
+.rotate-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.confirm p#rotate-message { color: var(--text); }
+dialog.confirm p#rotate-message.fail { color: var(--danger); }
 code { font-family: var(--mono); font-size: 12px; }
 @media (max-width: 600px) {
   /* minmax(0, …), min-width: 0 and width: 100% let fields shrink to the

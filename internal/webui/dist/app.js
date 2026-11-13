@@ -16,7 +16,7 @@ const token = (() => {
 const $ = (sel, root = document) => root.querySelector(sel);
 // picked: hosts ticked for upgrade (opt-in, as upgrades reboot devices);
 // testSkipped: hosts unticked for testing (opt-out, so all are tested by default).
-const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set() }; // tests: name -> {ok, detail, ms} or {running}
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set(), rotating: false }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -40,7 +40,8 @@ async function api(method, path, body) {
 }
 
 // apiStream posts body and reads an NDJSON reply, handing each line to
-// onLine as it arrives; it returns the closing {"results": ...} line.
+// onLine as it arrives; it returns the closing {"results": ...} (or
+// {"outcome": ...}) line.
 async function apiStream(path, body, onLine) {
   const res = await fetch(path, {
     method: "POST",
@@ -60,7 +61,7 @@ async function apiStream(path, body, onLine) {
       if (!line) continue;
       const msg = JSON.parse(line);
       if (msg.error) throw new APIError(res.status, msg);
-      if (msg.results) last = msg;
+      if (msg.results || msg.outcome) last = msg;
       else onLine(msg);
     }
     if (done) return last;
@@ -498,7 +499,8 @@ function renderHosts() {
     del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
     del.addEventListener("click", () => removeHost(h, del));
     stackLabels(del, "Removing…");
-    actions.append(test, edit, del);
+    // Only a host's own password; one from a credential set rotates with the set.
+    actions.append(test, edit, rotateButton("host", h.name, h.pass.kind !== "unset"), del);
     tr.append(actions);
     tbody.append(tr);
   }
@@ -722,7 +724,7 @@ function renderCredentials() {
     if (c.used_by.length) { del.disabled = true; del.title = `Used by ${used}; point them at another set first`; }
     del.addEventListener("click", () => removeCredential(c, del));
     stackLabels(del, "Removing…");
-    actions.append(edit, del);
+    actions.append(edit, rotateButton("credential", c.name, c.pass.kind !== "unset"), del);
     tr.append(actions);
     tbody.append(tr);
   }
@@ -782,6 +784,88 @@ async function removeCredential(c, btn) {
     } catch (err) {
       if (!(await onConflict(err))) banner(`Could not remove ${c.name}: ${err.message}`);
     }
+  });
+}
+
+// rotateButton is always built, so every row's buttons line up; without a
+// password of its own to rotate it is an invisible, inert placeholder.
+function rotateButton(kind, name, available) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "link"; b.textContent = "Rotate";
+  stackLabels(b, "Rotating…");
+  if (!available) {
+    b.classList.add("placeholder");
+    b.disabled = true;
+    return b;
+  }
+  b.title = "Set a new random password on its RouterOS devices and store it in SSM";
+  b.addEventListener("click", () => rotatePass(kind, name, b));
+  return b;
+}
+
+// rotatePass asks the server what a rotation would change, confirms it,
+// then runs it with each device's step shown as it happens. The dialog
+// stays open until the rotation ends: the server finishes it either way.
+async function rotatePass(kind, name, btn) {
+  let plan;
+  try {
+    plan = await busy(btn, "Rotating…", () => api("POST", "/api/rotate/plan", { kind, name }));
+  } catch (err) {
+    banner(`Cannot rotate the password of ${kind} ${name}: ${err.message}`);
+    return;
+  }
+  const n = plan.hosts.length;
+  const answer = await askConfirm({
+    title: `Rotate the password of ${plan.label}?`,
+    text: `A new random password is set on ${n} RouterOS device${n === 1 ? "" : "s"} (${plan.hosts.join(", ")}) and ` +
+      (plan.in_place ? `replaces the one in SSM parameter ${plan.dest}.` : `stored in SSM as ${plan.dest}; the config then points at it.`) +
+      " If any device fails, the others are set back to the old password.",
+    ok: "Rotate",
+  });
+  if (!answer.ok) return;
+
+  const dlg = $("#rotate-dialog"), list = $("#rotate-list"), msg = $("#rotate-message"), close = $("#rotate-close");
+  const results = {}, rows = {};
+  const show = (host) => rows[host] && rows[host].lastChild.replaceWith(statusBadge(host, results));
+  $("#rotate-title").textContent = `Rotating the password of ${plan.label}`;
+  list.replaceChildren(...plan.hosts.map((host) => {
+    results[host] = { running: true, label: "waiting…" };
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = host; label.title = host;
+    li.append(label, statusBadge(host, results));
+    rows[host] = li;
+    return li;
+  }));
+  msg.hidden = true; msg.className = "";
+  state.rotating = true;
+  close.disabled = true;
+  dlg.showModal();
+  await busy(btn, "Rotating…", async () => {
+    let text, failed;
+    try {
+      const { outcome } = await apiStream("/api/rotate/apply", { kind, name, confirm: true }, (r) => {
+        results[r.name] = r.running ? { running: true, label: r.summary } : r;
+        show(r.name);
+      });
+      for (const r of outcome.results) { results[r.name] = r; show(r.name); }
+      text = [outcome.message, ...(outcome.notes || []).map((x) => `Note: ${x}`)].join(" ");
+      failed = !outcome.ok;
+    } catch (err) {
+      text = `Rotation failed: ${err.message}`;
+      failed = true;
+      for (const host of plan.hosts) {
+        if (results[host].running) { results[host] = { ok: false, summary: "not changed", detail: err.message }; show(host); }
+      }
+    }
+    msg.textContent = text;
+    msg.classList.toggle("fail", failed);
+    msg.hidden = false;
+    state.rotating = false;
+    close.disabled = false;
+    close.focus();
+    await load();
+    if (!failed) toast(`Rotated the password of ${plan.label}`);
   });
 }
 
@@ -871,6 +955,8 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTests();
   });
   $("#test-run").addEventListener("click", () => runTests(selectedTests(), $("#test-run")));
+  // The rotation's outcome must be seen; Esc does not close it while it runs.
+  $("#rotate-dialog").addEventListener("cancel", (e) => { if (state.rotating) e.preventDefault(); });
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

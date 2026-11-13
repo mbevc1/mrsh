@@ -36,7 +36,7 @@ mrsh -H admin@10.0.0.9:2222 run -c 'df -h'        # a host not in the config
 | `mt backup` (aliases `b`, `ba`, `bck`) | Export `.rsc` and binary `.backup` files into `backups/` on each router (a rolling 7-day set, e.g. `backups/Mon.rsc`), then download them to `--path`: a local dir keeps the same weekday names (`<group>/<name>/Mon.rsc`), and `s3://bucket/prefix/` keeps dated copies (`<group>/<name>/2026-04-06.rsc`; expire them with a lifecycle rule). Files from older mrsh versions (`backup-<Day>.*` in the device root) are left in place. |
 | `mt reboot` (alias `re`), `mt upgrade` (alias `up`) | Reboot, or take the next upgrade step (RouterOS packages, then routerboard firmware); each step ends in a reboot, so a device behind on both needs two runs. `mt upgrade --wait` instead waits for each reboot (up to 10 minutes per device) and takes every step in one run, ending with a fresh check. Both commands ask for confirmation unless `-y` / `--assume-yes`. |
 | `mt version` (aliases `v`, `ver`) | Firmware and package versions across the fleet. |
-| `ui` | A local browser editor for the same config (loopback only): hosts, credential sets, defaults and commands. Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. Its **Finish all steps** box, ticked by default, works like `--wait`; untick it to take one step per click, as the CLI does by default. It runs no other commands. |
+| `ui` | A local browser editor for the same config (loopback only): hosts, credential sets, defaults and commands. Its **Test** button and tab connect to saved hosts and run a read-only version check (RouterOS version and board, or "connected" for other hosts). Its **Upgrade** tab runs the `mt upgrade` step on ticked devices after a confirmation (devices reboot), with a dry run option. Its **Rotate** buttons rotate a RouterOS password, as `--rotate-pass` does. Its **Finish all steps** box, ticked by default, works like `--wait`; untick it to take one step per click, as the CLI does by default. It runs no other commands. |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion; host names, groups and credential set names complete from the config. |
 | `version` (aliases `v`, `ver`), or `-v` / `--version` | Build info. |
 
@@ -91,7 +91,7 @@ printf '%s\n' "$RB03_PASS" | mrsh hosts add --name rb03 -H 10.0.0.3 --pass-ssm
 
 - **Names:** by default `<ssm_prefix>/<creds|hosts|defaults>/<name>/<user|pass>`. `ssm_prefix` is set under `defaults` (default `/mrsh`), so two configs can share an AWS account without clashing.
 - **Overwriting:** an existing parameter is only replaced with `--overwrite` (in the UI, "Replace an existing parameter").
-- **Removing:** `hosts remove` and `credentials remove` leave parameters alone. With `--delete-secret` they also delete the entry's own parameters under `ssm_prefix` that no other entry references.
+- **Removing:** `hosts remove` and `credentials remove` leave parameters alone. With `--delete-secret` they also delete the entry's own parameters under `ssm_prefix` that no other entry references. The UI's Delete confirmation offers the same as a checkbox when the entry has its own SSM parameters.
 - **Permissions:** storing needs `ssm:PutParameter`, `ssm:AddTagsToResource` and `sts:GetCallerIdentity`, and deleting needs `ssm:DeleteParameter`, on `parameter/mrsh/*`. Only the people managing secrets need these; the scheduled task keeps read-only access.
 
 ### Rotating a password
@@ -110,6 +110,8 @@ mrsh hosts update --name rb02 --rotate-pass --dry-run       # list the devices i
 ```
 
 It asks for confirmation unless `-y`, works on RouterOS devices only, and changes only the password (run other changes separately). The password must already be in SSM, or `--pass-ssm` must say where to store the new one. The new password is never printed.
+
+In the UI, **Rotate** on a credential set, or on a host with its own password, does the same after a confirmation that lists the devices and the parameter. A password already in SSM rotates in place; any other moves to the default parameter name, and the config points at it. A dialog shows each device's step as it happens and the outcome at the end. A rotation runs to completion even if the page is closed, and Ctrl-C or Exit waits for it.
 
 Secrets are resolved only for the hosts a command targets, using the standard AWS credential chain. `--debug` logs which source each secret came from, never its value. A literal `pass` makes the config file itself a secret, so every command that loads such a config warns, naming where (`mrsh: warning: hosts.yaml stores 1 literal password(s) (host web02); …`), and so does `--pass` on `hosts add/update` and `credentials set`.
 

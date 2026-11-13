@@ -1,12 +1,12 @@
 [![ci](https://github.com/mbevc1/mrsh/actions/workflows/ci.yaml/badge.svg)](https://github.com/mbevc1/mrsh/actions/workflows/ci.yaml)
 [![Downloads](https://img.shields.io/github/downloads/mbevc1/mrsh/total)](https://github.com/mbevc1/mrsh/releases)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/logo/mrsh-dark.svg">
-  <img alt="mrsh logo" src="assets/logo/mrsh.svg" width="96" height="96">
-</picture>
-
-# mrsh
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/mrsh-wordmark-dark.svg">
+    <img alt="mrsh" src="assets/logo/mrsh-wordmark.svg" height="64">
+  </picture>
+</h1>
 
 Multi Remote SHell: run commands over SSH on many hosts in parallel, with MikroTik RouterOS shortcuts, secrets kept out of the config file, and config and backups stored locally or in S3.
 

@@ -41,9 +41,10 @@ const TokenHeader = "X-Mrsh-Token"
 type Server struct {
 	Store   config.ConfigStore
 	Token   string
-	Test    Tester    // nil disables /api/test
-	Upgrade *Upgrader // nil disables /api/upgrade/*
-	addr    string    // host:port actually bound
+	Test    Tester              // nil disables /api/test
+	Upgrade *Upgrader           // nil disables /api/upgrade/*
+	Secrets config.SecretWriter // nil disables storing user/pass in SSM
+	addr    string              // host:port actually bound
 
 	quitMu   sync.Mutex
 	quit     chan struct{} // closed when the page asks the server to exit

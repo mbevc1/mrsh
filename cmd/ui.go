@@ -51,6 +51,7 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			srv.Test = hostTester(cmd, opts)
+			srv.Secrets = newSecretWriter()
 			srv.Upgrade = hostUpgrader(cmd, opts)
 			url := srv.URL()
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "mrsh ui editing %s\nopen %s\npress Ctrl-C or the Exit button to stop\n", store.Location(), url)

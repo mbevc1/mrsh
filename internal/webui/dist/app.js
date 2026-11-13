@@ -512,20 +512,36 @@ function setupSecret(fs) {
   fs.append($("#secret-template").content.cloneNode(true));
   $("legend", fs).textContent = field === "pass" ? "Password" : "User";
   const kind = $(".kind", fs), value = $(".value", fs), hint = $(".secret-hint", fs);
+  const ssmRow = $(".ssm-row", fs), ssmName = $(".ssm-name", fs);
   const sync = () => {
     const k = kind.value, stored = fs.dataset.stored === "true";
     value.hidden = k === "unset";
-    value.type = k === "plain" && field === "pass" ? "password" : "text";
+    value.type = (k === "plain" || k === "ssm") && field === "pass" ? "password" : "text";
     value.placeholder = { plain: stored ? "(unchanged)" : "value", env: "VARIABLE_NAME",
-      arn: "arn:aws:ssm:region:account:parameter/name" }[k] || "";
+      arn: "arn:aws:ssm:region:account:parameter/name", ssm: "value to store" }[k] || "";
+    ssmRow.hidden = k !== "ssm";
+    ssmName.placeholder = `Parameter, default ${defaultSSMName(fs, field)}`;
     hint.textContent = k === "plain" && stored ? "A literal is stored. Leave empty to keep it."
+      : k === "ssm" ? "Stored as an encrypted SecureString when you save; the config keeps only its ARN."
       : k !== "unset" ? ""
       : fs.closest("#defaults-form") ? "Not set: falls back to the Defaults credential set, then keys or the SSH agent."
       : fs.closest("#cred-form") ? "Not set: hosts using this set fall back to Defaults."
       : "Falls back to the credential set, then Defaults, then the SSH agent.";
   };
-  kind.addEventListener("change", () => { value.value = ""; sync(); });
+  kind.addEventListener("change", () => { value.value = ""; ssmName.value = ""; $(".ssm-overwrite", fs).checked = false; sync(); });
+  // The default parameter name follows the entry's name as it is typed.
+  fs.closest("form")?.elements.name?.addEventListener("input", sync);
   fs.sync = sync;
+}
+
+// defaultSSMName mirrors the server's default: <prefix>/<creds|hosts>/<name>/<field>.
+function defaultSSMName(fs, field) {
+  const prefix = (state.cfg && state.cfg.defaults.ssm_prefix) || "/mrsh";
+  const form = fs.closest("form");
+  if (form.id === "defaults-form") return `${prefix}/defaults/${field}`;
+  const owner = form.id === "cred-form" ? "creds" : "hosts";
+  const name = (form.elements.name && form.elements.name.value.trim()) || "NAME";
+  return `${prefix}/${owner}/${name}/${field}`;
 }
 
 function fillSecret(fs, s) {
@@ -537,7 +553,12 @@ function fillSecret(fs, s) {
 }
 
 function readSecret(fs) {
-  return { kind: $(".kind", fs).value, value: $(".value", fs).value };
+  const s = { kind: $(".kind", fs).value, value: $(".value", fs).value };
+  if (s.kind === "ssm") {
+    s.name = $(".ssm-name", fs).value.trim();
+    s.overwrite = $(".ssm-overwrite", fs).checked;
+  }
+  return s;
 }
 
 function openEditor(h) {
@@ -614,7 +635,7 @@ async function removeHost(h, btn) {
 function renderDefaults() {
   const d = state.cfg.defaults, f = $("#defaults-form").elements;
   for (const k of ["port", "timeout", "parallel"]) f[k].value = d[k] || "";
-  for (const k of ["output", "host_key_policy", "credential", "identity_file", "known_hosts"]) f[k].value = d[k] || "";
+  for (const k of ["output", "host_key_policy", "credential", "identity_file", "known_hosts", "ssm_prefix"]) f[k].value = d[k] || "";
   f.debug.checked = !!d.debug;
   fillSecret($('#defaults-form [data-secret="user"]'), d.user);
   fillSecret($('#defaults-form [data-secret="pass"]'), d.pass);
@@ -626,7 +647,7 @@ async function saveDefaults(ev) {
   const body = {
     port: Number(f.port.value) || 0, timeout: Number(f.timeout.value) || 0, parallel: Number(f.parallel.value) || 0,
     output: f.output.value, host_key_policy: f.host_key_policy.value, debug: f.debug.checked, credential: f.credential.value,
-    identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(),
+    identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(), ssm_prefix: f.ssm_prefix.value.trim(),
     user: readSecret($('#defaults-form [data-secret="user"]')), pass: readSecret($('#defaults-form [data-secret="pass"]')),
   };
   await busy(ev.submitter || $("#defaults-form button[type=submit]"), "Saving…", async () => {

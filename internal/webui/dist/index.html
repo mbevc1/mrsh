@@ -87,6 +87,7 @@
       </label>
       <label class="wide">Identity file <input name="identity_file" placeholder="~/.ssh/id_ed25519"></label>
       <label class="wide">known_hosts <input name="known_hosts" placeholder="~/.ssh/known_hosts"></label>
+      <label class="wide">SSM prefix <input name="ssm_prefix" placeholder="/mrsh" spellcheck="false"></label>
       <label class="check"><input name="debug" type="checkbox"> Debug logging</label>
       <fieldset class="wide secret" data-secret="user"></fieldset>
       <fieldset class="wide secret" data-secret="pass"></fieldset>
@@ -190,8 +191,13 @@
       <option value="plain">Literal</option>
       <option value="env">Environment variable</option>
       <option value="arn">AWS ARN (SSM / Secrets Manager)</option>
+      <option value="ssm">Store in AWS SSM</option>
     </select>
     <input class="value" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="ssm-row" hidden>
+    <input class="ssm-name" autocomplete="off" spellcheck="false" aria-label="SSM parameter name">
+    <label class="check"><input class="ssm-overwrite" type="checkbox"> Replace an existing parameter</label>
   </div>
   <small class="secret-hint"></small>
 </template>

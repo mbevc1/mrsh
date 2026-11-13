@@ -20,11 +20,12 @@ defaults:
   identity_file: ~/.ssh/id_ed25519
   host_key_policy: accept-new   # strict | accept-new | insecure (built-in default: insecure)
   known_hosts: ~/.ssh/known_hosts
+  ssm_prefix: /mrsh    # where --pass-ssm/--user-ssm store secrets: /mrsh/<creds|hosts>/<name>/<user|pass>
 
 credentials:
-  routers:
+  routers:             # store the password with: mrsh creds set --name routers --pass-ssm
     user: admin
-    pass_arn: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers/pass
+    pass_arn: arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/creds/routers/pass
 
 # Run by 'mrsh run' when no -c or --script is given.
 commands:

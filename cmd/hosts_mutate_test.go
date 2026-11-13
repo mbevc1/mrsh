@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mbevc1/mrsh/internal/config"
+	"github.com/mbevc1/mrsh/internal/ssmtest"
 )
 
 func loadFile(t *testing.T, path string) *config.Config {
@@ -147,3 +148,61 @@ func TestRunJSONStdoutCleanWithDebug(t *testing.T) {
 }
 
 func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }
+
+func TestHostsUpdateAndRemoveSeveral(t *testing.T) {
+	fake := ssmtest.Start(t)
+	shared := fake.Put("/mrsh/shared/pass", "pw")
+	cfg := writeConfig(t, "credentials:\n  routers: {user: admin}\nhosts:\n"+
+		"  - {name: web01, host: 10.0.0.1, group: web}\n  - {name: web02, host: 10.0.0.2, group: web}\n  - {name: db01, host: 10.0.0.3, group: db}\n"+
+		"  - {name: lab1, host: 10.0.0.4, group: lab, pass_arn: "+shared+"}\n  - {name: lab2, host: 10.0.0.5, group: lab, pass_arn: "+shared+"}\n")
+	run := func(stdin string, args ...string) (string, string, error) {
+		t.Helper()
+		return execIn(t, stdin, append([]string{"-q", "-f", cfg}, args...)...)
+	}
+	port := func(name string) int { h, _ := findHost(loadCfg(t, cfg), name); return h.Port }
+
+	// Several hosts are listed and confirmed first.
+	if _, errOut, err := run("n\n", "hosts", "update", "--name", "web01,db01", "--port", "2222"); err == nil || !strings.Contains(errOut, "About to update 2 host(s):\n  web01 (10.0.0.1)\n  db01 (10.0.0.3)") || port("web01") != 0 {
+		t.Fatalf("declined: %v\n%s", err, errOut)
+	}
+	if out, _, err := run("y\n", "hosts", "update", "--name", "web01", "--name", "db01", "--port", "2222", "--credential", "routers"); err != nil ||
+		!strings.Contains(out, "updated 2 host(s)") || !strings.HasSuffix(strings.TrimSpace(out), ": web01, db01") || port("web01") != 2222 || port("db01") != 2222 || port("web02") != 0 {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if _, _, err := run("", "hosts", "update", "--in-group", "web", "-g", "staging", "-y"); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range loadCfg(t, cfg).Hosts[:2] {
+		if h.Group != "staging" {
+			t.Errorf("%s group = %q", h.Name, h.Group)
+		}
+	}
+
+	// What applies to one host only is refused for several.
+	for args, want := range map[string]string{
+		"hosts update --name web01,web02 -H 10.9.9.9 -y":   "sets one host's address",
+		"hosts update --name web01,web02 --pass-ssm -y":    "store it in a credential set",
+		"hosts update --name web01,web02 --rotate-pass -y": "one host at a time",
+		"hosts update --name web01,web02 -y":               "nothing to update",
+		"hosts update --name web01,ghost --port 1 -y":      "ghost",
+		"hosts update --in-group nosuch --port 1 -y":       "no hosts in group nosuch",
+		"hosts update --port 1 -y":                         "needs --name",
+		"hosts remove -y":                                  "needs --name",
+	} {
+		if _, _, err := run("", strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", args, err)
+		}
+	}
+
+	// Removing several at once; a parameter only they share goes with them.
+	if out, _, err := run("", "hosts", "remove", "--name", "lab1,lab2", "--delete-secret", "-y"); err != nil ||
+		!strings.Contains(out, "removed 2 hosts (lab1, lab2)") || !strings.Contains(out, "deleted SSM parameter /mrsh/shared/pass") || fake.Param("/mrsh/shared/pass") != nil {
+		t.Fatalf("remove several: %v\n%s", err, out)
+	}
+	if out, _, err := run("", "-g", "staging", "hosts", "remove", "-y"); err != nil || !strings.Contains(out, "removed 2 hosts (web01, web02)") {
+		t.Fatalf("remove by group: %v\n%s", err, out)
+	}
+	if hosts := loadCfg(t, cfg).Hosts; len(hosts) != 1 || hosts[0].Name != "db01" {
+		t.Errorf("left: %+v", hosts)
+	}
+}

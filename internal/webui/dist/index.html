@@ -45,11 +45,14 @@
       <input id="search" type="search" placeholder="Search name, host or group" aria-label="Search hosts">
       <select id="group-filter" aria-label="Filter by group"><option value="">All groups</option></select>
       <span class="count" id="count"></span>
+      <span class="count" id="hosts-picked"></span>
+      <button id="bulk-edit" type="button" class="ghost" disabled>Edit selected</button>
+      <button id="bulk-delete" type="button" class="ghost danger" data-busy="Removing…" disabled>Delete selected</button>
       <button id="add" type="button">Add host</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th></th></tr></thead>
+        <thead><tr><th class="check"><input type="checkbox" id="hosts-all" aria-label="Select all shown hosts"></th><th>Name</th><th>Host</th><th>Port</th><th>Group</th><th>User</th><th>Pass</th><th>Identity</th><th class="status">Status</th><th class="actions"></th></tr></thead>
         <tbody id="hosts"></tbody>
       </table>
     </div>
@@ -64,7 +67,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>User</th><th>Pass</th><th>Identity</th><th>Used by</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>User</th><th>Pass</th><th>Identity</th><th>Used by</th><th class="actions"></th></tr></thead>
         <tbody id="creds"></tbody>
       </table>
     </div>
@@ -87,6 +90,7 @@
       </label>
       <label class="wide">Identity file <input name="identity_file" placeholder="~/.ssh/id_ed25519"></label>
       <label class="wide">known_hosts <input name="known_hosts" placeholder="~/.ssh/known_hosts"></label>
+      <label class="wide">SSM prefix <input name="ssm_prefix" placeholder="/mrsh" spellcheck="false"></label>
       <label class="check"><input name="debug" type="checkbox"> Debug logging</label>
       <fieldset class="wide secret" data-secret="user"></fieldset>
       <fieldset class="wide secret" data-secret="pass"></fieldset>
@@ -165,6 +169,26 @@
     </div>
   </form>
 </dialog>
+<dialog id="bulk-editor">
+  <form id="bulk-form" class="grid-form" method="dialog">
+    <h2 id="bulk-title">Edit hosts</h2>
+    <p class="hint wide" id="bulk-hosts"></p>
+    <p class="hint wide">Tick a field to set it on every selected host; the others stay as they are. An empty value clears the field.</p>
+    <div class="bulk-field"><label class="check"><input type="checkbox" data-change="group"> Group</label><input name="group" list="groups" autocomplete="off" disabled></div>
+    <div class="bulk-field"><label class="check"><input type="checkbox" data-change="port"> Port</label><input name="port" type="number" min="0" max="65535" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="credential"> Credential set</label>
+      <select name="credential" class="cred-select" disabled><option value="">None (use Defaults)</option></select></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="identity_file"> Identity file</label><input name="identity_file" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="known_hosts"> known_hosts</label><input name="known_hosts" placeholder="default" disabled></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="user"> User</label><fieldset class="secret" data-secret="user" disabled></fieldset></div>
+    <div class="bulk-field wide"><label class="check"><input type="checkbox" data-change="pass"> Password</label><fieldset class="secret" data-secret="pass" disabled></fieldset></div>
+    <ul class="errors wide" id="bulk-errors"></ul>
+    <div class="actions wide">
+      <button type="button" class="ghost" id="bulk-cancel">Cancel</button>
+      <button type="submit" id="bulk-save" data-busy="Saving…">Save</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="cred-editor">
   <form id="cred-form" class="grid-form" method="dialog">
     <h2 id="cred-title">Add credential</h2>
@@ -182,6 +206,33 @@
 <datalist id="groups"></datalist>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<dialog id="confirm-dialog" class="confirm">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text"></p>
+    <label class="check" id="confirm-option" hidden><input type="checkbox" id="confirm-checkbox"> <span id="confirm-option-text"></span></label>
+    <div class="actions">
+      <button type="submit" value="cancel" class="ghost">Cancel</button>
+      <button type="submit" value="ok" id="confirm-ok" class="danger-fill"></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rotate-dialog" class="confirm">
+  <form method="dialog">
+    <h2 id="rotate-title"></h2>
+    <ul id="rotate-list" class="rotate-list"></ul>
+    <p id="rotate-message" hidden></p>
+    <div id="rotate-secret" class="secret-once" hidden>
+      <div class="secret-line"><code id="rotate-password"></code><button type="button" id="rotate-copy" class="icon" title="Copy the new password" aria-label="Copy the new password"></button></div>
+      <p id="rotate-secret-note"></p>
+    </div>
+    <div class="actions">
+      <button type="submit" value="close" id="rotate-close">Close</button>
+    </div>
+  </form>
+</dialog>
+
 <template id="secret-template">
   <legend></legend>
   <div class="secret-row">
@@ -190,8 +241,13 @@
       <option value="plain">Literal</option>
       <option value="env">Environment variable</option>
       <option value="arn">AWS ARN (SSM / Secrets Manager)</option>
+      <option value="ssm">Store in AWS SSM</option>
     </select>
     <input class="value" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="ssm-row" hidden>
+    <input class="ssm-name" autocomplete="off" spellcheck="false" aria-label="SSM parameter name">
+    <label class="check"><input class="ssm-overwrite" type="checkbox"> Replace an existing parameter</label>
   </div>
   <small class="secret-hint"></small>
 </template>

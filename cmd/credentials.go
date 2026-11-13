@@ -101,11 +101,37 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 		Short:   "Create a credential set, or change the given fields of an existing one",
 		Long: "Create the named credential set, or update it: only the flags given change, and a new\n" +
 			"user or pass variant replaces the old one. The user and identity file come from the\n" +
-			"global -u/--user and -i/--identity-file (-i \"\" clears it).",
-		Example: "  mrsh credentials set --name routers -u admin --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers\n" +
+			"global -u/--user and -i/--identity-file (-i \"\" clears it).\n\n" + ssmFlagsHelp + rotateFlagsHelp,
+		Example: "  mrsh credentials set --name routers -u admin --pass-ssm      # prompts; stores /mrsh/creds/routers/pass\n" +
+			"  mrsh credentials set --name routers -u admin --pass-arn arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/routers\n" +
 			"  mrsh hosts update --name rt1 --credential routers",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.rotate {
+				if err := checkRotateOnly(cmd); err != nil {
+					return err
+				}
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				r, err := credentialRotation(lc.cfg, name)
+				if err != nil {
+					return err
+				}
+				return r.rotate(cmd, opts, lc)
+			}
+			if f.wantsSSM(cmd) {
+				lc, err := loadConfig(cmd, opts)
+				if err != nil {
+					return err
+				}
+				if err := f.store(cmd, opts, lc.cfg, config.OwnerCredential, name); err != nil {
+					return err
+				}
+			} else if err := f.store(cmd, opts, nil, "", ""); err != nil {
+				return err
+			}
 			store, err := openStore(opts)
 			if err != nil {
 				return err
@@ -122,12 +148,12 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 					set.IdentityFile, changed = opts.identityFile, true
 				}
 				if !changed {
-					return errors.New("nothing to set: pass at least one of -u/--user-env/--user-arn, --pass/--pass-env/--pass-arn, -i")
+					return errors.New("nothing to set: pass at least one of -u/--user-env/--user-arn/--user-ssm, --pass/--pass-env/--pass-arn/--pass-ssm, -i")
 				}
 				return d.SetCredential(name, set)
 			})
 			if err != nil {
-				return err
+				return f.storedNote(err)
 			}
 			verb := "updated"
 			if created {
@@ -141,11 +167,13 @@ func newCredentialsSetCmd(opts *globalOptions) *cobra.Command {
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
 	f.register(cmd)
+	f.registerRotate(cmd)
 	return cmd
 }
 
 func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 	var name string
+	var deleteSecret bool
 	cmd := &cobra.Command{
 		Use:     "remove --name NAME",
 		Aliases: []string{"r", "rm"},
@@ -157,16 +185,27 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			asked := false
+			var cfgAfter *config.Config
+			var del, kept []string
 			err = config.Mutate(cmd.Context(), store, func(d *config.Document, cfg *config.Config) error {
-				if _, ok := cfg.Credentials[name]; !ok {
+				set, ok := cfg.Credentials[name]
+				if !ok {
 					return fmt.Errorf("%w: %s", config.ErrCredentialNotFound, name)
 				}
 				if used := cfg.CredentialUsers(name); len(used) > 0 {
 					return fmt.Errorf("credential %s is used by %s; point them at another set first", name, strings.Join(used, ", "))
 				}
+				del, kept, cfgAfter = nil, nil, cfg
+				also := ""
+				if deleteSecret {
+					del, kept = cfg.SecretDeletes(set.Credentials, "credential "+name)
+					if len(del) > 0 {
+						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
+					}
+				}
 				if !opts.yes && !asked {
 					asked = true
-					if err := confirm(cmd, fmt.Sprintf("Remove credential %s from %s? [y/N]: ", name, store.Location())); err != nil {
+					if err := confirm(cmd, fmt.Sprintf("Remove credential %s from %s%s? [y/N]: ", name, store.Location(), also)); err != nil {
 						return err
 					}
 				}
@@ -175,11 +214,14 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed credential %s from %s\n", name, store.Location())
-			return err
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "removed credential %s from %s\n", name, store.Location()); err != nil {
+				return err
+			}
+			return deleteSecrets(cmd, cfgAfter, del, kept)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "credential set name")
+	cmd.Flags().BoolVar(&deleteSecret, "delete-secret", false, "also delete the set's own SSM parameters under ssm_prefix that nothing else uses")
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.RegisterFlagCompletionFunc("name", completeCredentials(opts))
 	return cmd

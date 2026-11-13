@@ -64,6 +64,7 @@ type Defaults struct {
 	Parallel      int    `yaml:"parallel,omitempty" json:"parallel,omitempty"`
 	Output        string `yaml:"output,omitempty" json:"output,omitempty"`
 	Debug         bool   `yaml:"debug,omitempty" json:"debug,omitempty"`
+	SSMPrefix     string `yaml:"ssm_prefix,omitempty" json:"ssm_prefix,omitempty"` // default parameter path for secrets mrsh stores; DefaultSSMPrefix when empty
 }
 
 // Host is one inventory entry.
@@ -154,6 +155,13 @@ func (c *Config) Validate() error {
 	}
 	if !validHostKeyPolicies[d.HostKeyPolicy] {
 		add("defaults: host_key_policy %q must be strict, accept-new or insecure", d.HostKeyPolicy)
+	}
+	if d.SSMPrefix != "" {
+		if err := ValidSSMName(d.SSMPrefix); err != nil {
+			add("defaults: ssm_prefix %v", err)
+		} else if strings.HasSuffix(d.SSMPrefix, "/") {
+			add("defaults: ssm_prefix %q must not end with '/'", d.SSMPrefix)
+		}
 	}
 
 	seen := make(map[string]int, len(c.Hosts))

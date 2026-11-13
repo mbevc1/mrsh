@@ -23,9 +23,12 @@ import (
 
 // Options selects the auth methods and host keys the server offers.
 type Options struct {
-	User                string
-	Password            string // enables password auth
-	KeyboardInteractive bool   // answer with Password via keyboard-interactive instead
+	User     string
+	Password string // enables password auth
+	// PasswordFunc, when set, decides password logins instead of Password,
+	// for tests whose password changes (rotation).
+	PasswordFunc        func(pass string) bool
+	KeyboardInteractive bool // answer with Password via keyboard-interactive instead
 	AuthorizedKey       gossh.PublicKey
 	HostSigners         []gossh.Signer // default: one fresh ed25519 key
 	// Exec, when set, answers commands instead of the local shell.
@@ -80,8 +83,11 @@ func Start(t testing.TB, opts Options) *Server {
 	for _, s := range opts.HostSigners {
 		srv.AddHostKey(s)
 	}
-	if opts.Password != "" && !opts.KeyboardInteractive {
+	if (opts.Password != "" || opts.PasswordFunc != nil) && !opts.KeyboardInteractive {
 		srv.PasswordHandler = func(ctx gliderssh.Context, pass string) bool {
+			if opts.PasswordFunc != nil {
+				return userOK(ctx) && opts.PasswordFunc(pass)
+			}
 			return userOK(ctx) && pass == opts.Password
 		}
 	}

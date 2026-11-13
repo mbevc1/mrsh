@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,10 +22,14 @@ const maxBody = 1 << 20
 // "plain", "env" or "arn". Literal usernames are shown as-is; literal
 // passwords never reach the browser: Set reports that one exists, and
 // sending kind "plain" with an empty value keeps the stored password.
+// The page may also send kind "ssm": Value is stored in SSM under Name (the
+// default name when empty) and the entry keeps its ARN; it is never sent back.
 type Secret struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
-	Set   bool   `json:"set,omitempty"`
+	Kind      string `json:"kind"`
+	Value     string `json:"value"`
+	Set       bool   `json:"set,omitempty"`
+	Name      string `json:"name,omitempty"`      // kind ssm only
+	Overwrite bool   `json:"overwrite,omitempty"` // kind ssm only
 }
 
 // HostView is one host in the API.
@@ -61,6 +66,7 @@ type DefaultsView struct {
 	KnownHosts    string `json:"known_hosts"`
 	HostKeyPolicy string `json:"host_key_policy"`
 	Credential    string `json:"credential"`
+	SSMPrefix     string `json:"ssm_prefix"`
 	User          Secret `json:"user"`
 	Pass          Secret `json:"pass"`
 }
@@ -156,7 +162,7 @@ func viewOf(cfg *config.Config, version, location string) ConfigView {
 		Defaults: DefaultsView{
 			Port: d.Port, Timeout: d.Timeout, Parallel: d.Parallel, Output: d.Output, Debug: d.Debug,
 			IdentityFile: d.IdentityFile, KnownHosts: d.KnownHosts, HostKeyPolicy: d.HostKeyPolicy,
-			Credential: d.Credential, User: toSecret(d.UserRef()), Pass: toSecret(d.PassRef()),
+			Credential: d.Credential, SSMPrefix: d.SSMPrefix, User: toSecret(d.UserRef()), Pass: toSecret(d.PassRef()),
 		},
 		Credentials: []CredentialView{},
 		Hosts:       make([]HostView, 0, len(cfg.Hosts)), Groups: []string{},
@@ -212,10 +218,25 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/test", s.testHosts)
 	mux.HandleFunc("POST /api/upgrade/dry", s.upgradeHosts(false))
 	mux.HandleFunc("POST /api/upgrade/apply", s.upgradeHosts(true))
+	mux.HandleFunc("POST /api/rotate/plan", s.rotatePlan)
+	mux.HandleFunc("POST /api/rotate/apply", s.rotateApply)
 	mux.HandleFunc("POST /api/validate", s.validate)
 	mux.HandleFunc("POST /api/hosts", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v HostView
 		if err := decode(r, &v); err != nil {
+			return err
+		}
+		check := func() error {
+			h, err := v.toHost(config.Host{})
+			if err != nil {
+				return err
+			}
+			if _, taken := find(cfg, h.Name); taken {
+				return fmt.Errorf("%w: %s", config.ErrHostExists, h.Name)
+			}
+			return (&config.Config{Credentials: cfg.Credentials, Hosts: []config.Host{h}}).Validate()
+		}
+		if err := s.storeSSM(r.Context(), cfg, config.OwnerHost, strings.TrimSpace(v.Name), check, &v.User, &v.Pass); err != nil {
 			return err
 		}
 		h, err := v.toHost(config.Host{})
@@ -234,6 +255,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 		if err := decode(r, &v); err != nil {
 			return err
 		}
+		check := func() error {
+			h, err := v.toHost(old)
+			if err != nil {
+				return err
+			}
+			return (&config.Config{Credentials: cfg.Credentials, Hosts: []config.Host{h}}).Validate()
+		}
+		if err := s.storeSSM(r.Context(), cfg, config.OwnerHost, strings.TrimSpace(v.Name), check, &v.User, &v.Pass); err != nil {
+			return err
+		}
 		h, err := v.toHost(old)
 		if err != nil {
 			return &config.ValidationError{Err: err}
@@ -245,23 +276,51 @@ func (s *Server) routes(mux *http.ServeMux) {
 		}
 		return d.ReplaceHost(name, h)
 	}))
-	mux.HandleFunc("DELETE /api/hosts/{name}", s.mutate(func(r *http.Request, d *config.Document, _ *config.Config) error {
-		return d.RemoveHost(r.PathValue("name"))
+	mux.HandleFunc("DELETE /api/hosts/{name}", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
+		name := r.PathValue("name")
+		if r.URL.Query().Get("delete_secret") == "1" {
+			if _, ok := find(cfg, name); !ok {
+				return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
+			}
+			del, kept := cfg.HostSecretDeletes([]string{name})
+			if err := s.deleteSecretsAfterSave(r, cfg, del, kept); err != nil {
+				return err
+			}
+		}
+		return d.RemoveHost(name)
 	}))
+	mux.HandleFunc("POST /api/hosts/bulk-edit", s.mutate(s.bulkEditHosts))
+	mux.HandleFunc("POST /api/hosts/bulk-delete", s.mutate(s.bulkDeleteHosts))
 	mux.HandleFunc("PUT /api/defaults", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v DefaultsView
 		if err := decode(r, &v); err != nil {
 			return err
 		}
-		creds, err := applyCredentials(v.User, v.Pass, cfg.Defaults.Credentials)
+		build := func() (config.Defaults, error) {
+			creds, err := applyCredentials(v.User, v.Pass, cfg.Defaults.Credentials)
+			return config.Defaults{
+				Credential: strings.TrimSpace(v.Credential), Credentials: creds, Port: v.Port, Timeout: v.Timeout, Parallel: v.Parallel,
+				Output: v.Output, Debug: v.Debug, IdentityFile: strings.TrimSpace(v.IdentityFile),
+				KnownHosts: strings.TrimSpace(v.KnownHosts), HostKeyPolicy: v.HostKeyPolicy, SSMPrefix: strings.TrimSpace(v.SSMPrefix),
+			}, err
+		}
+		// Default names follow the prefix being saved, not the old one.
+		withPrefix := &config.Config{Defaults: config.Defaults{SSMPrefix: strings.TrimSpace(v.SSMPrefix)}}
+		check := func() error {
+			d, err := build()
+			if err != nil {
+				return err
+			}
+			return (&config.Config{Defaults: d, Credentials: cfg.Credentials}).Validate()
+		}
+		if err := s.storeSSM(r.Context(), withPrefix, config.OwnerDefaults, "", check, &v.User, &v.Pass); err != nil {
+			return err
+		}
+		next, err := build()
 		if err != nil {
 			return &config.ValidationError{Err: err}
 		}
-		return d.SetDefaults(config.Defaults{
-			Credential: strings.TrimSpace(v.Credential), Credentials: creds, Port: v.Port, Timeout: v.Timeout, Parallel: v.Parallel,
-			Output: v.Output, Debug: v.Debug, IdentityFile: strings.TrimSpace(v.IdentityFile),
-			KnownHosts: strings.TrimSpace(v.KnownHosts), HostKeyPolicy: v.HostKeyPolicy,
-		})
+		return d.SetDefaults(next)
 	}))
 	mux.HandleFunc("POST /api/credentials", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v CredentialView
@@ -274,6 +333,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 		}
 		if _, taken := cfg.Credentials[v.Name]; taken {
 			return &config.ValidationError{Err: fmt.Errorf("credential %s already exists", v.Name)}
+		}
+		check := func() error {
+			set, err := v.toSet(config.CredentialSet{})
+			if err != nil {
+				return err
+			}
+			return (&config.Config{Credentials: map[string]config.CredentialSet{v.Name: set}}).Validate()
+		}
+		if err := s.storeSSM(r.Context(), cfg, config.OwnerCredential, v.Name, check, &v.User, &v.Pass); err != nil {
+			return err
 		}
 		set, err := v.toSet(config.CredentialSet{})
 		if err != nil {
@@ -295,6 +364,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 		if n := strings.TrimSpace(v.Name); n != "" && n != name {
 			return &config.ValidationError{Err: errors.New("credential: renaming is not supported; add a new set and point hosts at it")}
 		}
+		check := func() error {
+			set, err := v.toSet(old)
+			if err != nil {
+				return err
+			}
+			return (&config.Config{Credentials: map[string]config.CredentialSet{name: set}}).Validate()
+		}
+		if err := s.storeSSM(r.Context(), cfg, config.OwnerCredential, name, check, &v.User, &v.Pass); err != nil {
+			return err
+		}
 		set, err := v.toSet(old)
 		if err != nil {
 			return &config.ValidationError{Err: err}
@@ -305,6 +384,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 		name := r.PathValue("name")
 		if used := cfg.CredentialUsers(name); len(used) > 0 {
 			return &config.ValidationError{Err: fmt.Errorf("credential %s is used by %s; point them at another set first", name, strings.Join(used, ", "))}
+		}
+		if set, ok := cfg.Credentials[name]; ok && r.URL.Query().Get("delete_secret") == "1" {
+			del, kept := cfg.SecretDeletes(set.Credentials, "credential "+name)
+			if err := s.deleteSecretsAfterSave(r, cfg, del, kept); err != nil {
+				return err
+			}
 		}
 		return d.RemoveCredential(name)
 	}))
@@ -398,7 +483,10 @@ func (s *Server) mutate(fn func(*http.Request, *config.Document, *config.Config)
 			logRequest(r, http.StatusPreconditionRequired, start)
 			return
 		}
+		after := &afterSave{}
+		r = r.WithContext(context.WithValue(r.Context(), afterSaveKey{}, after))
 		next, err := config.MutateAt(r.Context(), s.Store, version, func(d *config.Document, c *config.Config) error {
+			after.fns = nil // an edit that runs again starts over
 			return fn(r, d, c)
 		})
 		status := http.StatusOK
@@ -406,7 +494,13 @@ func (s *Server) mutate(fn func(*http.Request, *config.Document, *config.Config)
 		switch {
 		case err == nil:
 			w.Header().Set("ETag", next)
-			writeJSON(w, status, map[string]string{"version": next})
+			reply := map[string]any{"version": next}
+			for _, f := range after.fns {
+				for k, v := range f(context.WithoutCancel(r.Context())) {
+					reply[k] = v
+				}
+			}
+			writeJSON(w, status, reply)
 		case errors.Is(err, config.ErrVersionConflict):
 			status = http.StatusPreconditionFailed
 			writeError(w, status, "the config changed since you loaded it (another tab or the CLI); reload to see the latest")

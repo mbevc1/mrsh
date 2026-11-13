@@ -131,3 +131,11 @@ func TestParseKV(t *testing.T) {
 		t.Errorf("kv = %v", kv)
 	}
 }
+
+func TestPasswordCmdQuoting(t *testing.T) {
+	got := PasswordCmd(`o"l\d$1?`, "New-pass_9")
+	want := `/password old-password="o\"l\\d\$1\?" new-password="New-pass_9" confirm-new-password="New-pass_9"`
+	if got != want {
+		t.Errorf("PasswordCmd = %s\nwant          %s", got, want)
+	}
+}

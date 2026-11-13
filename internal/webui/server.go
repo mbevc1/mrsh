@@ -2,8 +2,10 @@
 //
 // The server edits config. Beyond that, when the command wires them up, it
 // connects to saved hosts for two fixed actions: POST /api/test (a read-only
-// version check) and POST /api/upgrade/{dry,apply} (the `mt upgrade` step,
-// which reboots devices; apply needs "confirm": true). It never runs
+// version check), POST /api/upgrade/{dry,apply} (the `mt upgrade` step,
+// which reboots devices; apply needs "confirm": true) and
+// POST /api/rotate/{plan,apply} (a RouterOS password rotation, as
+// --rotate-pass does; apply needs "confirm": true). It never runs
 // user-supplied commands and cannot reach addresses that are not saved hosts. Binding to loopback does not stop web pages
 // in the user's own browser from sending it requests, so every API call
 // must carry a per-launch token in a custom header (which cross-site pages
@@ -41,9 +43,11 @@ const TokenHeader = "X-Mrsh-Token"
 type Server struct {
 	Store   config.ConfigStore
 	Token   string
-	Test    Tester    // nil disables /api/test
-	Upgrade *Upgrader // nil disables /api/upgrade/*
-	addr    string    // host:port actually bound
+	Test    Tester              // nil disables /api/test
+	Upgrade *Upgrader           // nil disables /api/upgrade/*
+	Rotate  *Rotator            // nil disables /api/rotate/*
+	Secrets config.SecretWriter // nil disables storing user/pass in SSM
+	addr    string              // host:port actually bound
 
 	quitMu   sync.Mutex
 	quit     chan struct{} // closed when the page asks the server to exit
@@ -110,6 +114,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	case <-ctx.Done():
 	case <-s.quitChan():
 		slog.Debug("ui exit requested from the page")
+	}
+	// A rotation stopped between devices would leave them on different
+	// passwords, so let it finish (it is bounded by its own timeout).
+	if s.Rotate != nil && !s.Rotate.running.TryLock() {
+		slog.Warn("waiting for the password rotation to finish")
+		s.Rotate.running.Lock()
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -16,7 +16,7 @@ const token = (() => {
 const $ = (sel, root = document) => root.querySelector(sel);
 // picked: hosts ticked for upgrade (opt-in, as upgrades reboot devices);
 // testSkipped: hosts unticked for testing (opt-out, so all are tested by default).
-const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set() }; // tests: name -> {ok, detail, ms} or {running}
+const state = { version: "", cfg: null, editing: null, tests: {}, upgrades: {}, picked: new Set(), testSkipped: new Set(), hostPicked: new Set(), rotating: false }; // tests: name -> {ok, detail, ms} or {running}
 
 class APIError extends Error {
   constructor(status, body) {
@@ -40,7 +40,8 @@ async function api(method, path, body) {
 }
 
 // apiStream posts body and reads an NDJSON reply, handing each line to
-// onLine as it arrives; it returns the closing {"results": ...} line.
+// onLine as it arrives; it returns the closing {"results": ...} (or
+// {"outcome": ...}) line.
 async function apiStream(path, body, onLine) {
   const res = await fetch(path, {
     method: "POST",
@@ -60,7 +61,7 @@ async function apiStream(path, body, onLine) {
       if (!line) continue;
       const msg = JSON.parse(line);
       if (msg.error) throw new APIError(res.status, msg);
-      if (msg.results) last = msg;
+      if (msg.results || msg.outcome) last = msg;
       else onLine(msg);
     }
     if (done) return last;
@@ -106,7 +107,7 @@ function copyIcon() {
 
 // copyText uses the Clipboard API (loopback counts as a secure context),
 // falling back to a hidden textarea for older browsers.
-async function copyText(text, what) {
+async function copyText(text, what, echo = true) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -120,7 +121,7 @@ async function copyText(text, what) {
     ta.remove();
     if (!ok) { toast(`Could not copy ${what}`); return; }
   }
-  toast(`Copied ${what}: ${text}`);
+  toast(echo ? `Copied ${what}: ${text}` : `Copied ${what}`);
 }
 
 function copyButton(text, what, title = `Copy ${what}`) {
@@ -221,6 +222,48 @@ function secretText(s) {
   }
 }
 
+const literalTitle = "Literal password: stored in the config file in the clear. Prefer an environment variable or Store in AWS SSM.";
+
+// warnIcon is the warning triangle used by the literal-password marks.
+function warnIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ["M12 3 2 21h20L12 3z", "M12 10v5", "M12 18h.01"]) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d);
+    svg.append(p);
+  }
+  return svg;
+}
+
+// passCell shows a password reference, marking a literal one like the CLI's warning.
+function passCell(pass, fallback) {
+  if (pass.kind !== "plain") return fallback;
+  const td = document.createElement("td");
+  td.className = "ref";
+  const mark = document.createElement("span");
+  mark.className = "literal";
+  mark.title = literalTitle;
+  mark.setAttribute("aria-label", "literal password, stored in the clear");
+  mark.append(warnIcon(), "********");
+  td.append(mark);
+  return td;
+}
+
+// trackCovered marks a table box "covered" while some of its columns are
+// out of view to the right, under the pinned row actions: when the table is
+// wider than the box and not scrolled to its end. Size changes (a re-render,
+// a resize, a tab shown) and scrolling both update it.
+function trackCovered(wrap) {
+  const update = () => wrap.classList.toggle("covered", wrap.scrollLeft + wrap.clientWidth < wrap.scrollWidth - 1);
+  wrap.addEventListener("scroll", update, { passive: true });
+  const ro = new ResizeObserver(update);
+  ro.observe(wrap);
+  ro.observe(wrap.querySelector("table"));
+}
+
 function cell(text, cls) {
   const td = document.createElement("td");
   td.textContent = text;
@@ -282,6 +325,7 @@ function render() {
   for (const n of Object.keys(state.tests)) if (!names.has(n)) delete state.tests[n];
   for (const n of Object.keys(state.upgrades)) if (!names.has(n)) delete state.upgrades[n];
   for (const n of state.picked) if (!names.has(n)) state.picked.delete(n);
+  for (const n of state.hostPicked) if (!names.has(n)) state.hostPicked.delete(n);
   for (const n of state.testSkipped) if (!names.has(n)) state.testSkipped.delete(n);
 
   renderCredentials(); // first: fills the credential dropdowns the editors read
@@ -465,22 +509,34 @@ function renderTests() {
   syncSelection($("#test-all"), $("#test-count"), [$("#test-run")], selectedTests().length, names.size);
 }
 
-function renderHosts() {
+// shownHosts is the Hosts tab's rows under its search and group filter.
+function shownHosts() {
   const q = $("#search").value.trim().toLowerCase();
   const group = $("#group-filter").value;
-  const rows = state.cfg.hosts.filter((h) =>
+  return state.cfg.hosts.filter((h) =>
     (!group || h.group === group) &&
     (!q || [h.name, h.host, h.group].some((v) => v.toLowerCase().includes(q))));
+}
+
+// pickedHosts is what the bulk buttons act on: ticked hosts still shown.
+const pickedHosts = () => shownHosts().filter((h) => state.hostPicked.has(h.name));
+
+function renderHosts() {
+  const rows = shownHosts();
 
   const tbody = $("#hosts");
   tbody.replaceChildren();
   for (const h of rows) {
     const tr = document.createElement("tr");
     tr.append(
+      pickCell(h.name, state.hostPicked.has(h.name), (on) => {
+        if (on) state.hostPicked.add(h.name); else state.hostPicked.delete(h.name);
+        renderHosts();
+      }),
       cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
       // Unset fields come from the host's credential set (shown as "set: NAME"), else Defaults.
-      inherited(secretText(h.user), h.credential, "ref"), inherited(secretText(h.pass), h.credential, "ref"),
+      inherited(secretText(h.user), h.credential, "ref"), passCell(h.pass, inherited(secretText(h.pass), h.credential, "ref")),
       inherited(h.identity_file, h.credential, "ref"),
       statusCell(h.name),
     );
@@ -498,11 +554,13 @@ function renderHosts() {
     del.type = "button"; del.className = "link danger"; del.textContent = "Delete";
     del.addEventListener("click", () => removeHost(h, del));
     stackLabels(del, "Removing…");
-    actions.append(test, edit, del);
+    // Only a host's own password; one from a credential set rotates with the set.
+    actions.append(test, edit, rotateButton("host", h.name, h.pass.kind !== "unset"), del);
     tr.append(actions);
     tbody.append(tr);
   }
   $("#count").textContent = `${rows.length} of ${state.cfg.hosts.length} hosts`;
+  syncSelection($("#hosts-all"), $("#hosts-picked"), [$("#bulk-edit"), $("#bulk-delete")], pickedHosts().length, rows.length);
   $("#empty").hidden = state.cfg.hosts.length > 0;
 }
 
@@ -512,20 +570,38 @@ function setupSecret(fs) {
   fs.append($("#secret-template").content.cloneNode(true));
   $("legend", fs).textContent = field === "pass" ? "Password" : "User";
   const kind = $(".kind", fs), value = $(".value", fs), hint = $(".secret-hint", fs);
+  const ssmRow = $(".ssm-row", fs), ssmName = $(".ssm-name", fs);
   const sync = () => {
     const k = kind.value, stored = fs.dataset.stored === "true";
     value.hidden = k === "unset";
-    value.type = k === "plain" && field === "pass" ? "password" : "text";
+    value.type = (k === "plain" || k === "ssm") && field === "pass" ? "password" : "text";
     value.placeholder = { plain: stored ? "(unchanged)" : "value", env: "VARIABLE_NAME",
-      arn: "arn:aws:ssm:region:account:parameter/name" }[k] || "";
-    hint.textContent = k === "plain" && stored ? "A literal is stored. Leave empty to keep it."
+      arn: "arn:aws:ssm:region:account:parameter/name", ssm: "value to store" }[k] || "";
+    ssmRow.hidden = k !== "ssm";
+    ssmName.placeholder = `Parameter, default ${defaultSSMName(fs, field)}`;
+    hint.classList.toggle("warn", k === "plain" && field === "pass");
+    hint.textContent = k === "plain" && field === "pass"
+      ? `Stored in the config file in the clear; prefer an environment variable or Store in AWS SSM.${stored ? " Leave empty to keep the current one." : ""}`
+      : k === "ssm" ? "Stored as an encrypted SecureString when you save; the config keeps only its ARN."
       : k !== "unset" ? ""
       : fs.closest("#defaults-form") ? "Not set: falls back to the Defaults credential set, then keys or the SSH agent."
       : fs.closest("#cred-form") ? "Not set: hosts using this set fall back to Defaults."
       : "Falls back to the credential set, then Defaults, then the SSH agent.";
   };
-  kind.addEventListener("change", () => { value.value = ""; sync(); });
+  kind.addEventListener("change", () => { value.value = ""; ssmName.value = ""; $(".ssm-overwrite", fs).checked = false; sync(); });
+  // The default parameter name follows the entry's name as it is typed.
+  fs.closest("form")?.elements.name?.addEventListener("input", sync);
   fs.sync = sync;
+}
+
+// defaultSSMName mirrors the server's default: <prefix>/<creds|hosts>/<name>/<field>.
+function defaultSSMName(fs, field) {
+  const prefix = (state.cfg && state.cfg.defaults.ssm_prefix) || "/mrsh";
+  const form = fs.closest("form");
+  if (form.id === "defaults-form") return `${prefix}/defaults/${field}`;
+  const owner = form.id === "cred-form" ? "creds" : "hosts";
+  const name = (form.elements.name && form.elements.name.value.trim()) || "NAME";
+  return `${prefix}/${owner}/${name}/${field}`;
 }
 
 function fillSecret(fs, s) {
@@ -537,7 +613,12 @@ function fillSecret(fs, s) {
 }
 
 function readSecret(fs) {
-  return { kind: $(".kind", fs).value, value: $(".value", fs).value };
+  const s = { kind: $(".kind", fs).value, value: $(".value", fs).value };
+  if (s.kind === "ssm") {
+    s.name = $(".ssm-name", fs).value.trim();
+    s.overwrite = $(".ssm-overwrite", fs).checked;
+  }
+  return s;
 }
 
 function openEditor(h) {
@@ -598,13 +679,121 @@ async function saveHost(ev) {
   });
 }
 
+// askConfirm shows the in-page confirmation, optionally with one checkbox,
+// and resolves to {ok, checked}.
+function askConfirm({ title, text, ok, option }) {
+  const dlg = $("#confirm-dialog");
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").textContent = text;
+  $("#confirm-ok").textContent = ok;
+  $("#confirm-option").hidden = !option;
+  $("#confirm-checkbox").checked = false;
+  $("#confirm-option-text").textContent = option || "";
+  dlg.returnValue = "cancel";
+  dlg.showModal();
+  return new Promise((resolve) => dlg.addEventListener("close",
+    () => resolve({ ok: dlg.returnValue === "ok", checked: $("#confirm-checkbox").checked }), { once: true }));
+}
+
+// ownSSM counts the SSM parameters an entry's own user and pass point at.
+const ownSSM = (e) => [e.user, e.pass].filter((s) => s && s.kind === "arn" && s.value.includes(":ssm:")).length;
+
+// removedNote turns a removal's "secrets" report into toast text, and puts
+// anything that went wrong in the banner.
+function removedNote(what, reply) {
+  const rep = reply && reply.secrets;
+  if (!rep) return `Removed ${what}`;
+  if (rep.errors.length) banner(`Removed ${what}, but deleting from SSM failed: ${rep.errors.join("; ")}`);
+  const kept = rep.kept.length ? ` (kept ${rep.kept.length}: ${rep.kept.join("; ")})` : "";
+  return `Removed ${what}; deleted ${rep.deleted.length} SSM parameter(s)${kept}`;
+}
+
+// openBulkEditor starts every field as "leave as is" (unticked, disabled).
+function openBulkEditor() {
+  const hosts = pickedHosts();
+  if (!hosts.length) return;
+  const form = $("#bulk-form");
+  form.reset();
+  for (const box of form.querySelectorAll("[data-change]")) setChange(box, false);
+  fillSecret($('#bulk-form [data-secret="user"]'), { kind: "unset" });
+  fillSecret($('#bulk-form [data-secret="pass"]'), { kind: "unset" });
+  $("#bulk-title").textContent = `Edit ${hosts.length} host${hosts.length === 1 ? "" : "s"}`;
+  $("#bulk-hosts").textContent = hosts.map((h) => h.name).join(", ");
+  $("#bulk-errors").replaceChildren();
+  $("#bulk-editor").showModal();
+}
+
+// setChange ticks or unticks a bulk field and enables its control to match.
+function setChange(box, on) {
+  box.checked = on;
+  const target = box.closest(".bulk-field").querySelector("input:not([data-change]), select, fieldset");
+  target.disabled = !on;
+  return target;
+}
+
+async function saveBulk(ev) {
+  ev.preventDefault();
+  const hosts = pickedHosts().map((h) => h.name);
+  const f = $("#bulk-form").elements;
+  const changes = {};
+  for (const box of $("#bulk-form").querySelectorAll("[data-change]:checked")) {
+    const k = box.dataset.change;
+    if (k === "user" || k === "pass") changes[k] = readSecret($(`#bulk-form [data-secret="${k}"]`));
+    else if (k === "port") changes.port = Number(f.port.value) || 0;
+    else changes[k] = f[k].value.trim();
+  }
+  if (!Object.keys(changes).length) {
+    showErrors($("#bulk-errors"), new Error("Tick at least one field to change."));
+    return;
+  }
+  await busy($("#bulk-save"), "Saving…", async () => {
+    try {
+      await api("POST", "/api/hosts/bulk-edit", { hosts, changes });
+      $("#bulk-editor").close();
+      for (const n of hosts) delete state.tests[n]; // earlier results no longer describe them
+      await load();
+      toast(`Updated ${hosts.length} host${hosts.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      if (await onConflict(err)) { $("#bulk-editor").close(); return; }
+      showErrors($("#bulk-errors"), err);
+    }
+  });
+}
+
+async function removeHosts() {
+  const hosts = pickedHosts();
+  if (!hosts.length) return;
+  const names = hosts.map((h) => h.name);
+  const n = hosts.length, own = hosts.some((h) => ownSSM(h) > 0);
+  const answer = await askConfirm({
+    title: `Remove ${n} host${n === 1 ? "" : "s"}?`, text: `${names.join(", ")} ${n === 1 ? "is" : "are"} removed from the config.`, ok: "Remove",
+    option: own ? "Also delete their SSM parameters (only ones under the SSM prefix that nothing left uses)" : "",
+  });
+  if (!answer.ok) return;
+  await busy($("#bulk-delete"), "Removing…", async () => {
+    try {
+      const reply = await api("POST", "/api/hosts/bulk-delete", { hosts: names, delete_secret: answer.checked });
+      for (const name of names) state.hostPicked.delete(name);
+      await load();
+      toast(removedNote(n === 1 ? names[0] : `${n} hosts`, reply));
+    } catch (err) {
+      if (!(await onConflict(err))) banner(`Could not remove ${n === 1 ? names[0] : `${n} hosts`}: ${err.message}`);
+    }
+  });
+}
+
 async function removeHost(h, btn) {
-  if (!confirm(`Remove host ${h.name} (${h.host})?`)) return;
+  const n = ownSSM(h);
+  const answer = await askConfirm({
+    title: `Remove host ${h.name}?`, text: `${h.name} (${h.host}) is removed from the config.`, ok: "Remove",
+    option: n ? `Also delete its SSM parameter${n > 1 ? "s" : ""} (only ones under the SSM prefix that nothing else uses)` : "",
+  });
+  if (!answer.ok) return;
   await busy(btn, "Removing…", async () => {
     try {
-      await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}`);
+      const reply = await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}${answer.checked ? "?delete_secret=1" : ""}`);
       await load();
-      toast(`Removed ${h.name}`);
+      toast(removedNote(h.name, reply));
     } catch (err) {
       if (!(await onConflict(err))) banner(`Could not remove ${h.name}: ${err.message}`);
     }
@@ -614,7 +803,7 @@ async function removeHost(h, btn) {
 function renderDefaults() {
   const d = state.cfg.defaults, f = $("#defaults-form").elements;
   for (const k of ["port", "timeout", "parallel"]) f[k].value = d[k] || "";
-  for (const k of ["output", "host_key_policy", "credential", "identity_file", "known_hosts"]) f[k].value = d[k] || "";
+  for (const k of ["output", "host_key_policy", "credential", "identity_file", "known_hosts", "ssm_prefix"]) f[k].value = d[k] || "";
   f.debug.checked = !!d.debug;
   fillSecret($('#defaults-form [data-secret="user"]'), d.user);
   fillSecret($('#defaults-form [data-secret="pass"]'), d.pass);
@@ -626,7 +815,7 @@ async function saveDefaults(ev) {
   const body = {
     port: Number(f.port.value) || 0, timeout: Number(f.timeout.value) || 0, parallel: Number(f.parallel.value) || 0,
     output: f.output.value, host_key_policy: f.host_key_policy.value, debug: f.debug.checked, credential: f.credential.value,
-    identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(),
+    identity_file: f.identity_file.value.trim(), known_hosts: f.known_hosts.value.trim(), ssm_prefix: f.ssm_prefix.value.trim(),
     user: readSecret($('#defaults-form [data-secret="user"]')), pass: readSecret($('#defaults-form [data-secret="pass"]')),
   };
   await busy(ev.submitter || $("#defaults-form button[type=submit]"), "Saving…", async () => {
@@ -655,7 +844,7 @@ function renderCredentials() {
   for (const c of creds) {
     const tr = document.createElement("tr");
     const used = c.used_by.length ? c.used_by.join(", ") : "unused";
-    tr.append(cell(c.name), cell(secretText(c.user) || "-", "ref"), cell(secretText(c.pass) || "-", "ref"),
+    tr.append(cell(c.name), cell(secretText(c.user) || "-", "ref"), passCell(c.pass, cell(secretText(c.pass) || "-", "ref")),
       cell(c.identity_file || "-", c.identity_file ? "ref" : "muted"), cell(used, c.used_by.length ? "" : "muted"));
     const actions = document.createElement("td");
     actions.className = "actions";
@@ -667,7 +856,7 @@ function renderCredentials() {
     if (c.used_by.length) { del.disabled = true; del.title = `Used by ${used}; point them at another set first`; }
     del.addEventListener("click", () => removeCredential(c, del));
     stackLabels(del, "Removing…");
-    actions.append(edit, del);
+    actions.append(edit, rotateButton("credential", c.name, c.pass.kind !== "unset"), del);
     tr.append(actions);
     tbody.append(tr);
   }
@@ -713,15 +902,115 @@ async function saveCredential(ev) {
 }
 
 async function removeCredential(c, btn) {
-  if (!confirm(`Remove credential ${c.name}?`)) return;
+  const n = ownSSM(c);
+  const answer = await askConfirm({
+    title: `Remove credential ${c.name}?`, text: `The credential set ${c.name} is removed from the config.`, ok: "Remove",
+    option: n ? `Also delete its SSM parameter${n > 1 ? "s" : ""} (only ones under the SSM prefix that nothing else uses)` : "",
+  });
+  if (!answer.ok) return;
   await busy(btn, "Removing…", async () => {
     try {
-      await api("DELETE", `/api/credentials/${encodeURIComponent(c.name)}`);
+      const reply = await api("DELETE", `/api/credentials/${encodeURIComponent(c.name)}${answer.checked ? "?delete_secret=1" : ""}`);
       await load();
-      toast(`Removed credential ${c.name}`);
+      toast(removedNote(`credential ${c.name}`, reply));
     } catch (err) {
       if (!(await onConflict(err))) banner(`Could not remove ${c.name}: ${err.message}`);
     }
+  });
+}
+
+// rotateButton is always built, so every row's buttons line up; without a
+// password of its own to rotate it is an invisible, inert placeholder.
+// showOnce puts the new password in the result dialog. It is never kept:
+// closing the dialog clears it, and the server has no way to show it again.
+function showOnce(password, plan) {
+  $("#rotate-password").textContent = password;
+  $("#rotate-secret-note").textContent = plan.store === "env"
+    ? `Set ${plan.dest} to it before the next mrsh run; nothing else keeps it. It is not shown again after you close this window.`
+    : "It is not shown again after you close this window.";
+  $("#rotate-secret").hidden = false;
+}
+
+function rotateButton(kind, name, available) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "link"; b.textContent = "Rotate";
+  stackLabels(b, "Rotating…");
+  if (!available) {
+    b.classList.add("placeholder");
+    b.disabled = true;
+    return b;
+  }
+  b.title = "Set a new random password on its RouterOS devices, kept where the current one is";
+  b.addEventListener("click", () => rotatePass(kind, name, b));
+  return b;
+}
+
+// rotatePass asks the server what a rotation would change, confirms it,
+// then runs it with each device's step shown as it happens. The dialog
+// stays open until the rotation ends: the server finishes it either way.
+async function rotatePass(kind, name, btn) {
+  let plan;
+  try {
+    plan = await busy(btn, "Rotating…", () => api("POST", "/api/rotate/plan", { kind, name }));
+  } catch (err) {
+    banner(`Cannot rotate the password of ${kind} ${name}: ${err.message}`);
+    return;
+  }
+  const n = plan.hosts.length;
+  const answer = await askConfirm({
+    title: `Rotate the password of ${plan.label}?`,
+    text: `A new random password is set on ${n} RouterOS device${n === 1 ? "" : "s"} (${plan.hosts.join(", ")}) and ` +
+      { ssm: `replaces the one in SSM parameter ${plan.dest}.`, literal: "replaces the literal in the config.",
+        env: `shown to you: set the environment variable ${plan.dest} to it yourself (this mrsh ui uses it until it stops).` }[plan.store] +
+      " If any device fails, the others are set back to the old password. The new password is shown once.",
+    ok: "Rotate",
+  });
+  if (!answer.ok) return;
+
+  const dlg = $("#rotate-dialog"), list = $("#rotate-list"), msg = $("#rotate-message"), close = $("#rotate-close");
+  const results = {}, rows = {};
+  const show = (host) => rows[host] && rows[host].lastChild.replaceWith(statusBadge(host, results));
+  $("#rotate-title").textContent = `Rotating the password of ${plan.label}`;
+  list.replaceChildren(...plan.hosts.map((host) => {
+    results[host] = { running: true, label: "waiting…" };
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = host; label.title = host;
+    li.append(label, statusBadge(host, results));
+    rows[host] = li;
+    return li;
+  }));
+  msg.hidden = true; msg.className = "";
+  $("#rotate-secret").hidden = true;
+  state.rotating = true;
+  close.disabled = true;
+  dlg.showModal();
+  await busy(btn, "Rotating…", async () => {
+    let text, failed;
+    try {
+      const { outcome } = await apiStream("/api/rotate/apply", { kind, name, confirm: true }, (r) => {
+        results[r.name] = r.running ? { running: true, label: r.summary } : r;
+        show(r.name);
+      });
+      for (const r of outcome.results) { results[r.name] = r; show(r.name); }
+      text = [outcome.message, ...(outcome.notes || []).map((x) => `Note: ${x}`)].join(" ");
+      failed = !outcome.ok;
+      if (outcome.password) showOnce(outcome.password, plan);
+    } catch (err) {
+      text = `Rotation failed: ${err.message}`;
+      failed = true;
+      for (const host of plan.hosts) {
+        if (results[host].running) { results[host] = { ok: false, summary: "not changed", detail: err.message }; show(host); }
+      }
+    }
+    msg.textContent = text;
+    msg.classList.toggle("fail", failed);
+    msg.hidden = false;
+    state.rotating = false;
+    close.disabled = false;
+    close.focus();
+    await load();
+    if (!failed) toast(`Rotated the password of ${plan.label}`);
   });
 }
 
@@ -811,6 +1100,28 @@ document.addEventListener("DOMContentLoaded", () => {
     renderTests();
   });
   $("#test-run").addEventListener("click", () => runTests(selectedTests(), $("#test-run")));
+  $("#hosts-all").addEventListener("change", (e) => {
+    for (const h of shownHosts()) if (e.target.checked) state.hostPicked.add(h.name); else state.hostPicked.delete(h.name);
+    renderHosts();
+  });
+  $("#bulk-edit").addEventListener("click", openBulkEditor);
+  $("#bulk-delete").addEventListener("click", removeHosts);
+  $("#bulk-cancel").addEventListener("click", () => $("#bulk-editor").close());
+  $("#bulk-form").addEventListener("submit", saveBulk);
+  for (const box of document.querySelectorAll("#bulk-form [data-change]")) {
+    box.addEventListener("change", () => {
+      const t = setChange(box, box.checked);
+      if (box.checked) { $("#bulk-errors").replaceChildren(); (t.querySelector?.("select") || t).focus(); }
+    });
+  }
+  // Storing in SSM is one host at a time; shared passwords belong in a credential set.
+  for (const opt of document.querySelectorAll('#bulk-form option[value="ssm"]')) opt.remove();
+  // The rotation's outcome must be seen; Esc does not close it while it runs.
+  $("#rotate-dialog").addEventListener("cancel", (e) => { if (state.rotating) e.preventDefault(); });
+  $("#rotate-dialog").addEventListener("close", () => { $("#rotate-password").textContent = ""; $("#rotate-secret").hidden = true; });
+  $("#rotate-copy").append(copyIcon());
+  $("#rotate-copy").addEventListener("click", () => copyText($("#rotate-password").textContent, "the new password", false));
+  document.querySelectorAll(".table-wrap").forEach(trackCovered);
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

@@ -73,13 +73,29 @@ tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--hover); }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
-td.actions { text-align: right; }
+td.actions { text-align: right; white-space: nowrap; }
+/* A wide table scrolls sideways; its row actions stay pinned in view. A
+   rule marks their edge only while columns sit underneath (the "covered"
+   class, kept by trackCovered). Not on phones, where the actions alone
+   would fill the table. */
+@media (min-width: 601px) {
+  td.actions, th.actions { position: sticky; right: 0; z-index: 1; }
+  td.actions { background: var(--panel); } /* the row hover tint still wins */
+  .table-wrap.covered td.actions, .table-wrap.covered th.actions { box-shadow: inset 1px 0 0 var(--line); }
+}
+td.actions > button + button { margin-left: 8px; }
+td.actions > button.placeholder { visibility: hidden; } /* keeps the column's slot; hidden from screen readers too */
 /* Reserve the status column up front, so a result does not resize the table. */
 /* Fixed layout: column widths come from the header, never from results. */
 .test-table { table-layout: fixed; min-width: 760px; }
 .test-table td { overflow: hidden; text-overflow: ellipsis; }
 .test-table th.time { width: 90px; }
-.test-table th.check { width: 44px; }
+.test-table th.check, #tab-hosts th.check { width: 44px; }
+.bulk-field { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.bulk-field > label.check { gap: 6px; font-size: 12px; color: var(--muted); }
+.bulk-field > input, .bulk-field > select { color: var(--text); font-size: 14px; }
+.bulk-field fieldset.secret legend { display: none; } /* the tick box names it */
+#bulk-form p.hint { margin: 0; }
 /* Results carry the most text (versions, steps, errors), so the Test and
    Upgrade tables give them 40% and scroll sideways on narrow screens rather
    than squeezing the name, host and group columns to nothing. */
@@ -92,6 +108,10 @@ button.danger-fill { background: var(--danger); border-color: var(--danger); col
 .hint.note code, .hint.warn code { line-height: 1; } /* inline code would grow its line */
 .hint.note { background: var(--panel); border-color: var(--line); }
 .hint.warn { color: var(--warn-text); background: var(--warn-bg); }
+/* A literal password: stored in the config file in the clear. */
+.literal { display: inline-flex; gap: 4px; align-items: center; padding: 1px 6px; border-radius: 4px; color: var(--warn-text); background: var(--warn-bg); }
+.literal svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.secret-hint.warn { color: var(--warn-text); }
 .hint-icon { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round; }
 th.status, td.status { width: 304px; min-width: 304px; max-width: 304px; overflow: hidden; } /* 280px badge + 2 × 12px padding */
@@ -114,11 +134,27 @@ fieldset.secret legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .secret-row { display: flex; gap: 8px; }
 .secret-row .value { flex: 1; font-family: var(--mono); }
 .secret-hint { color: var(--muted); }
+.ssm-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; }
+.ssm-row .ssm-name { flex: 1; min-width: 0; font-family: var(--mono); }
+.ssm-row label.check { display: flex; gap: 6px; font-size: 13px; color: var(--muted); }
 .errors { color: var(--danger); margin: 0; padding-left: 18px; }
 .errors:empty { display: none; }
-.actions { display: flex; gap: 8px; justify-content: flex-end; }
+div.actions { display: flex; gap: 8px; justify-content: flex-end; } /* not td: a flex cell drops out of the table */
 dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; width: min(760px, 94vw); }
 dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+dialog.confirm { width: min(460px, 94vw); }
+dialog.confirm form { display: grid; gap: 12px; }
+dialog.confirm h2 { margin: 0; font-size: 16px; }
+dialog.confirm p { margin: 0; color: var(--muted); }
+dialog.confirm label.check { display: flex; gap: 8px; align-items: flex-start; }
+.rotate-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rotate-list li { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 10px; align-items: center; }
+.rotate-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.confirm p#rotate-message { color: var(--text); }
+dialog.confirm p#rotate-message.fail { color: var(--danger); }
+.secret-once { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.secret-once .secret-line { display: flex; gap: 8px; align-items: center; }
+.secret-once code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; font-size: 14px; }
 code { font-family: var(--mono); font-size: 12px; }
 @media (max-width: 600px) {
   /* minmax(0, …), min-width: 0 and width: 100% let fields shrink to the
@@ -126,5 +162,7 @@ code { font-family: var(--mono); font-size: 12px; }
   .grid-form { grid-template-columns: minmax(0, 1fr); }
   .grid-form label, .grid-form fieldset { min-width: 0; }
   .grid-form label input, .grid-form label select, .grid-form fieldset input, .grid-form fieldset select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .grid-form input[type=checkbox] { width: auto; flex: none; } /* a stretched box pushes its label aside */
+  .bulk-field > input, .bulk-field > select { width: 100%; min-width: 0; box-sizing: border-box; }
   header { flex-wrap: wrap; }
 }

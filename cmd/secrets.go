@@ -168,56 +168,6 @@ func hiddenRead(cmd *cobra.Command, file *os.File, prompt string) (string, error
 	}
 }
 
-// ownSecretARNs are the SSM parameters an entry's own user and pass point
-// at, which removing the entry with --delete-secret may delete.
-func ownSecretARNs(c config.Credentials) []string {
-	var arns []string
-	for _, a := range []string{c.UserARN, c.PassARN} {
-		if strings.HasPrefix(a, "arn:") && strings.Contains(a, ":ssm:") {
-			arns = append(arns, a)
-		}
-	}
-	return arns
-}
-
-// secretUsers lists the entries (other than skip) whose own user or pass
-// references arn.
-func secretUsers(cfg *config.Config, arn, skip string) []string {
-	var users []string
-	uses := func(c config.Credentials) bool { return c.UserARN == arn || c.PassARN == arn }
-	if skip != "defaults" && uses(cfg.Defaults.Credentials) {
-		users = append(users, "defaults")
-	}
-	for _, name := range sortedNames(cfg.Credentials) {
-		if who := "credential " + name; who != skip && uses(cfg.Credentials[name].Credentials) {
-			users = append(users, who)
-		}
-	}
-	for _, h := range cfg.Hosts {
-		if who := "host " + h.Name; who != skip && uses(h.Credentials) {
-			users = append(users, who)
-		}
-	}
-	return users
-}
-
-// plannedDeletes splits an entry's SSM parameters into those mrsh deletes
-// (under the prefix, used by nothing else) and notes on those it keeps.
-func plannedDeletes(cfg *config.Config, c config.Credentials, who string) (del []string, kept []string) {
-	for _, arn := range ownSecretARNs(c) {
-		name, managed := cfg.ManagedSSMName(arn)
-		switch users := secretUsers(cfg, arn, who); {
-		case !managed:
-			kept = append(kept, fmt.Sprintf("kept %s: not under %s", arn, cfg.SSMPrefix()))
-		case len(users) > 0:
-			kept = append(kept, fmt.Sprintf("kept %s: still used by %s", name, strings.Join(users, ", ")))
-		default:
-			del = append(del, arn)
-		}
-	}
-	return del, kept
-}
-
 // deleteSecrets removes the planned parameters after the config change.
 func deleteSecrets(cmd *cobra.Command, cfg *config.Config, del, kept []string) error {
 	out := cmd.OutOrStdout()

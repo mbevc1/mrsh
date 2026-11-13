@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/mbevc1/mrsh/internal/config"
@@ -69,5 +70,50 @@ func (s *Server) storeSSM(ctx context.Context, cfg *config.Config, owner, name s
 		}
 		*p.sec = Secret{Kind: "arn", Value: arn}
 	}
+	return nil
+}
+
+// afterSave holds work an edit asks to run once the config is saved; each
+// function's map is merged into the reply.
+type afterSave struct {
+	fns []func(context.Context) map[string]any
+}
+
+type afterSaveKey struct{}
+
+// onSaved queues fn to run after the edit in r is saved.
+func onSaved(r *http.Request, fn func(context.Context) map[string]any) {
+	if a, ok := r.Context().Value(afterSaveKey{}).(*afterSave); ok {
+		a.fns = append(a.fns, fn)
+	}
+}
+
+// SecretsReport is the "secrets" part of a removal's reply.
+type SecretsReport struct {
+	Deleted []string `json:"deleted"`
+	Kept    []string `json:"kept"`
+	Errors  []string `json:"errors"`
+}
+
+// deleteSecretsAfterSave plans which of an entry's SSM parameters a removal
+// deletes (config.SecretDeletes) and deletes them once the removal is saved,
+// never before.
+func (s *Server) deleteSecretsAfterSave(r *http.Request, cfg *config.Config, c config.Credentials, who string) error {
+	del, kept := cfg.SecretDeletes(c, who)
+	if len(del) > 0 && s.Secrets == nil {
+		return &config.ValidationError{Err: errors.New("deleting SSM parameters is not available")}
+	}
+	onSaved(r, func(ctx context.Context) map[string]any {
+		rep := SecretsReport{Deleted: []string{}, Kept: append([]string{}, kept...), Errors: []string{}}
+		for _, arn := range del {
+			name, _ := cfg.ManagedSSMName(arn)
+			if err := s.Secrets.DeleteSecret(ctx, arn); err != nil {
+				rep.Errors = append(rep.Errors, err.Error())
+				continue
+			}
+			rep.Deleted = append(rep.Deleted, name)
+		}
+		return map[string]any{"secrets": rep}
+	})
 	return nil
 }

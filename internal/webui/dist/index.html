@@ -183,6 +183,18 @@
 <datalist id="groups"></datalist>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<dialog id="confirm-dialog" class="confirm">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text"></p>
+    <label class="check" id="confirm-option" hidden><input type="checkbox" id="confirm-checkbox"> <span id="confirm-option-text"></span></label>
+    <div class="actions">
+      <button type="submit" value="cancel" class="ghost">Cancel</button>
+      <button type="submit" value="ok" id="confirm-ok" class="danger-fill"></button>
+    </div>
+  </form>
+</dialog>
+
 <template id="secret-template">
   <legend></legend>
   <div class="secret-row">

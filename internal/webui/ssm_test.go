@@ -27,7 +27,13 @@ func (m *memSecrets) PutSecret(_ context.Context, name, value string, overwrite 
 	return "arn:aws:ssm:eu-west-1:123456789012:parameter" + name, nil
 }
 
-func (m *memSecrets) DeleteSecret(context.Context, string) error { return nil }
+func (m *memSecrets) DeleteSecret(_ context.Context, arn string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name, _ := config.SSMParamName(arn)
+	delete(m.params, name)
+	return nil
+}
 
 func TestStoreSecretsInSSM(t *testing.T) {
 	f := newFixture(t)
@@ -92,5 +98,57 @@ func TestStoreSecretsInSSM(t *testing.T) {
 	}
 	if code, body := mut("PUT", "/api/credentials/lab", `{"pass":{"kind":"ssm","value":"x","name":"/aws/x"}}`); code != 422 || !strings.Contains(body, "reserved") {
 		t.Errorf("reserved name: %d %s", code, body)
+	}
+}
+
+func TestRemoveDeletesSSMParameters(t *testing.T) {
+	f := newFixture(t)
+	mem := &memSecrets{params: map[string]string{}}
+	f.srv.Secrets = mem
+	f.h = f.srv.Handler()
+	mut := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		w, out := f.do(method, path, body, header("If-Match", f.version()))
+		return w.Code, out
+	}
+	for _, body := range []string{
+		`{"name":"lab","pass":{"kind":"ssm","value":"lab-pw"}}`,
+	} {
+		if code, out := mut("POST", "/api/credentials", body); code != 200 {
+			t.Fatalf("credential: %d %v", code, out)
+		}
+	}
+	labARN := "arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/creds/lab/pass"
+	for _, body := range []string{
+		`{"name":"rb8","host":"10.0.0.8","pass":{"kind":"ssm","value":"pw-8"}}`,
+		`{"name":"rb7","host":"10.0.0.7","pass":{"kind":"arn","value":"` + labARN + `"}}`, // shares lab's parameter
+	} {
+		if code, out := mut("POST", "/api/hosts", body); code != 200 {
+			t.Fatalf("host: %d %v", code, out)
+		}
+	}
+
+	// Without the flag nothing in SSM changes.
+	if code, out := mut("DELETE", "/api/hosts/rb8", ""); code != 200 || out["secrets"] != nil || mem.params["/mrsh/hosts/rb8/pass"] == "" {
+		t.Fatalf("plain delete: %d %v", code, out)
+	}
+	if code, out := mut("POST", "/api/hosts", `{"name":"rb8","host":"10.0.0.8","pass":{"kind":"arn","value":"arn:aws:ssm:eu-west-1:123456789012:parameter/mrsh/hosts/rb8/pass"}}`); code != 200 {
+		t.Fatalf("re-add: %d %v", code, out)
+	}
+
+	code, out := mut("DELETE", "/api/hosts/rb8?delete_secret=1", "")
+	rep, _ := out["secrets"].(map[string]any)
+	if code != 200 || fmt.Sprint(rep["deleted"]) != "[/mrsh/hosts/rb8/pass]" || mem.params["/mrsh/hosts/rb8/pass"] != "" {
+		t.Fatalf("delete with secrets: %d %v", code, out)
+	}
+
+	// A parameter another entry still uses is kept.
+	code, out = mut("DELETE", "/api/hosts/rb7?delete_secret=1", "")
+	rep, _ = out["secrets"].(map[string]any)
+	if code != 200 || !strings.Contains(fmt.Sprint(rep["kept"]), "still used by credential lab") || mem.params["/mrsh/creds/lab/pass"] != "lab-pw" {
+		t.Fatalf("shared: %d %v", code, out)
+	}
+	if code, out := mut("DELETE", "/api/credentials/lab?delete_secret=1", ""); code != 200 || mem.params["/mrsh/creds/lab/pass"] != "" {
+		t.Fatalf("credential delete: %d %v", code, out)
 	}
 }

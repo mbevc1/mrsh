@@ -313,7 +313,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 				del, kept, cfgAfter = nil, nil, cfg
 				also := ""
 				if deleteSecret {
-					del, kept = plannedDeletes(cfg, h.Credentials, "host "+h.Name)
+					del, kept = cfg.SecretDeletes(h.Credentials, "host "+h.Name)
 					if len(del) > 0 {
 						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
 					}

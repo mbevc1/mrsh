@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,8 +274,18 @@ func (s *Server) routes(mux *http.ServeMux) {
 		}
 		return d.ReplaceHost(name, h)
 	}))
-	mux.HandleFunc("DELETE /api/hosts/{name}", s.mutate(func(r *http.Request, d *config.Document, _ *config.Config) error {
-		return d.RemoveHost(r.PathValue("name"))
+	mux.HandleFunc("DELETE /api/hosts/{name}", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
+		name := r.PathValue("name")
+		if r.URL.Query().Get("delete_secret") == "1" {
+			h, ok := find(cfg, name)
+			if !ok {
+				return fmt.Errorf("%w: %s", config.ErrHostNotFound, name)
+			}
+			if err := s.deleteSecretsAfterSave(r, cfg, h.Credentials, "host "+name); err != nil {
+				return err
+			}
+		}
+		return d.RemoveHost(name)
 	}))
 	mux.HandleFunc("PUT /api/defaults", s.mutate(func(r *http.Request, d *config.Document, cfg *config.Config) error {
 		var v DefaultsView
@@ -370,6 +381,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 		if used := cfg.CredentialUsers(name); len(used) > 0 {
 			return &config.ValidationError{Err: fmt.Errorf("credential %s is used by %s; point them at another set first", name, strings.Join(used, ", "))}
 		}
+		if set, ok := cfg.Credentials[name]; ok && r.URL.Query().Get("delete_secret") == "1" {
+			if err := s.deleteSecretsAfterSave(r, cfg, set.Credentials, "credential "+name); err != nil {
+				return err
+			}
+		}
 		return d.RemoveCredential(name)
 	}))
 	mux.HandleFunc("PUT /api/commands", s.mutate(func(r *http.Request, d *config.Document, _ *config.Config) error {
@@ -462,7 +478,10 @@ func (s *Server) mutate(fn func(*http.Request, *config.Document, *config.Config)
 			logRequest(r, http.StatusPreconditionRequired, start)
 			return
 		}
+		after := &afterSave{}
+		r = r.WithContext(context.WithValue(r.Context(), afterSaveKey{}, after))
 		next, err := config.MutateAt(r.Context(), s.Store, version, func(d *config.Document, c *config.Config) error {
+			after.fns = nil // an edit that runs again starts over
 			return fn(r, d, c)
 		})
 		status := http.StatusOK
@@ -470,7 +489,13 @@ func (s *Server) mutate(fn func(*http.Request, *config.Document, *config.Config)
 		switch {
 		case err == nil:
 			w.Header().Set("ETag", next)
-			writeJSON(w, status, map[string]string{"version": next})
+			reply := map[string]any{"version": next}
+			for _, f := range after.fns {
+				for k, v := range f(context.WithoutCancel(r.Context())) {
+					reply[k] = v
+				}
+			}
+			writeJSON(w, status, reply)
 		case errors.Is(err, config.ErrVersionConflict):
 			status = http.StatusPreconditionFailed
 			writeError(w, status, "the config changed since you loaded it (another tab or the CLI); reload to see the latest")

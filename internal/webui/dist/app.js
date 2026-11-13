@@ -619,13 +619,47 @@ async function saveHost(ev) {
   });
 }
 
+// askConfirm shows the in-page confirmation, optionally with one checkbox,
+// and resolves to {ok, checked}.
+function askConfirm({ title, text, ok, option }) {
+  const dlg = $("#confirm-dialog");
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").textContent = text;
+  $("#confirm-ok").textContent = ok;
+  $("#confirm-option").hidden = !option;
+  $("#confirm-checkbox").checked = false;
+  $("#confirm-option-text").textContent = option || "";
+  dlg.returnValue = "cancel";
+  dlg.showModal();
+  return new Promise((resolve) => dlg.addEventListener("close",
+    () => resolve({ ok: dlg.returnValue === "ok", checked: $("#confirm-checkbox").checked }), { once: true }));
+}
+
+// ownSSM counts the SSM parameters an entry's own user and pass point at.
+const ownSSM = (e) => [e.user, e.pass].filter((s) => s && s.kind === "arn" && s.value.includes(":ssm:")).length;
+
+// removedNote turns a removal's "secrets" report into toast text, and puts
+// anything that went wrong in the banner.
+function removedNote(what, reply) {
+  const rep = reply && reply.secrets;
+  if (!rep) return `Removed ${what}`;
+  if (rep.errors.length) banner(`Removed ${what}, but deleting from SSM failed: ${rep.errors.join("; ")}`);
+  const kept = rep.kept.length ? ` (kept ${rep.kept.length}: ${rep.kept.join("; ")})` : "";
+  return `Removed ${what}; deleted ${rep.deleted.length} SSM parameter(s)${kept}`;
+}
+
 async function removeHost(h, btn) {
-  if (!confirm(`Remove host ${h.name} (${h.host})?`)) return;
+  const n = ownSSM(h);
+  const answer = await askConfirm({
+    title: `Remove host ${h.name}?`, text: `${h.name} (${h.host}) is removed from the config.`, ok: "Remove",
+    option: n ? `Also delete its SSM parameter${n > 1 ? "s" : ""} (only ones under the SSM prefix that nothing else uses)` : "",
+  });
+  if (!answer.ok) return;
   await busy(btn, "Removing…", async () => {
     try {
-      await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}`);
+      const reply = await api("DELETE", `/api/hosts/${encodeURIComponent(h.name)}${answer.checked ? "?delete_secret=1" : ""}`);
       await load();
-      toast(`Removed ${h.name}`);
+      toast(removedNote(h.name, reply));
     } catch (err) {
       if (!(await onConflict(err))) banner(`Could not remove ${h.name}: ${err.message}`);
     }
@@ -734,12 +768,17 @@ async function saveCredential(ev) {
 }
 
 async function removeCredential(c, btn) {
-  if (!confirm(`Remove credential ${c.name}?`)) return;
+  const n = ownSSM(c);
+  const answer = await askConfirm({
+    title: `Remove credential ${c.name}?`, text: `The credential set ${c.name} is removed from the config.`, ok: "Remove",
+    option: n ? `Also delete its SSM parameter${n > 1 ? "s" : ""} (only ones under the SSM prefix that nothing else uses)` : "",
+  });
+  if (!answer.ok) return;
   await busy(btn, "Removing…", async () => {
     try {
-      await api("DELETE", `/api/credentials/${encodeURIComponent(c.name)}`);
+      const reply = await api("DELETE", `/api/credentials/${encodeURIComponent(c.name)}${answer.checked ? "?delete_secret=1" : ""}`);
       await load();
-      toast(`Removed credential ${c.name}`);
+      toast(removedNote(`credential ${c.name}`, reply));
     } catch (err) {
       if (!(await onConflict(err))) banner(`Could not remove ${c.name}: ${err.message}`);
     }

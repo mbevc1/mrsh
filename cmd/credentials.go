@@ -198,7 +198,7 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 				del, kept, cfgAfter = nil, nil, cfg
 				also := ""
 				if deleteSecret {
-					del, kept = plannedDeletes(cfg, set.Credentials, "credential "+name)
+					del, kept = cfg.SecretDeletes(set.Credentials, "credential "+name)
 					if len(del) > 0 {
 						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
 					}

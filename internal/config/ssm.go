@@ -81,6 +81,56 @@ func (c *Config) ManagedSSMName(arnValue string) (string, bool) {
 	return name, ok && strings.HasPrefix(name, c.SSMPrefix()+"/")
 }
 
+// OwnSSMARNs are the SSM parameters c's user and pass point at.
+func OwnSSMARNs(c Credentials) []string {
+	var arns []string
+	for _, a := range []string{c.UserARN, c.PassARN} {
+		if _, ok := SSMParamName(a); ok {
+			arns = append(arns, a)
+		}
+	}
+	return arns
+}
+
+// SecretUsers lists the entries other than skip ("defaults", "credential
+// NAME" or "host NAME") whose own user or pass references arn.
+func (c *Config) SecretUsers(arn, skip string) []string {
+	var users []string
+	uses := func(cr Credentials) bool { return cr.UserARN == arn || cr.PassARN == arn }
+	if skip != "defaults" && uses(c.Defaults.Credentials) {
+		users = append(users, "defaults")
+	}
+	for _, name := range sortedKeys(c.Credentials) {
+		if who := "credential " + name; who != skip && uses(c.Credentials[name].Credentials) {
+			users = append(users, who)
+		}
+	}
+	for _, h := range c.Hosts {
+		if who := "host " + h.Name; who != skip && uses(h.Credentials) {
+			users = append(users, who)
+		}
+	}
+	return users
+}
+
+// SecretDeletes splits the SSM parameters of an entry being removed (who,
+// e.g. "host rb02") into those that may be deleted (under the prefix and
+// used by nothing else) and notes on those kept.
+func (c *Config) SecretDeletes(cr Credentials, who string) (del, kept []string) {
+	for _, arn := range OwnSSMARNs(cr) {
+		name, managed := c.ManagedSSMName(arn)
+		switch users := c.SecretUsers(arn, who); {
+		case !managed:
+			kept = append(kept, fmt.Sprintf("kept %s: not under %s", arn, c.SSMPrefix()))
+		case len(users) > 0:
+			kept = append(kept, fmt.Sprintf("kept %s: still used by %s", name, strings.Join(users, ", ")))
+		default:
+			del = append(del, arn)
+		}
+	}
+	return del, kept
+}
+
 // PassSource names where Effective takes h's password from: "host NAME",
 // "credential NAME" (the host's set or the defaults' set), "defaults", or
 // "" when nothing sets one.

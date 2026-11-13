@@ -222,6 +222,48 @@ function secretText(s) {
   }
 }
 
+const literalTitle = "Literal password: stored in the config file in the clear. Prefer an environment variable or Store in AWS SSM.";
+
+// warnIcon is the warning triangle used by the literal-password marks.
+function warnIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ["M12 3 2 21h20L12 3z", "M12 10v5", "M12 18h.01"]) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d);
+    svg.append(p);
+  }
+  return svg;
+}
+
+// passCell shows a password reference, marking a literal one like the CLI's warning.
+function passCell(pass, fallback) {
+  if (pass.kind !== "plain") return fallback;
+  const td = document.createElement("td");
+  td.className = "ref";
+  const mark = document.createElement("span");
+  mark.className = "literal";
+  mark.title = literalTitle;
+  mark.setAttribute("aria-label", "literal password, stored in the clear");
+  mark.append(warnIcon(), "********");
+  td.append(mark);
+  return td;
+}
+
+// trackCovered marks a table box "covered" while some of its columns are
+// out of view to the right, under the pinned row actions: when the table is
+// wider than the box and not scrolled to its end. Size changes (a re-render,
+// a resize, a tab shown) and scrolling both update it.
+function trackCovered(wrap) {
+  const update = () => wrap.classList.toggle("covered", wrap.scrollLeft + wrap.clientWidth < wrap.scrollWidth - 1);
+  wrap.addEventListener("scroll", update, { passive: true });
+  const ro = new ResizeObserver(update);
+  ro.observe(wrap);
+  ro.observe(wrap.querySelector("table"));
+}
+
 function cell(text, cls) {
   const td = document.createElement("td");
   td.textContent = text;
@@ -494,7 +536,7 @@ function renderHosts() {
       cell(h.name), hostCell(h), cell(h.port ? String(h.port) : "default", h.port ? "num" : "muted"),
       cell(h.group || "-", h.group ? "" : "muted"),
       // Unset fields come from the host's credential set (shown as "set: NAME"), else Defaults.
-      inherited(secretText(h.user), h.credential, "ref"), inherited(secretText(h.pass), h.credential, "ref"),
+      inherited(secretText(h.user), h.credential, "ref"), passCell(h.pass, inherited(secretText(h.pass), h.credential, "ref")),
       inherited(h.identity_file, h.credential, "ref"),
       statusCell(h.name),
     );
@@ -537,7 +579,9 @@ function setupSecret(fs) {
       arn: "arn:aws:ssm:region:account:parameter/name", ssm: "value to store" }[k] || "";
     ssmRow.hidden = k !== "ssm";
     ssmName.placeholder = `Parameter, default ${defaultSSMName(fs, field)}`;
-    hint.textContent = k === "plain" && stored ? "A literal is stored. Leave empty to keep it."
+    hint.classList.toggle("warn", k === "plain" && field === "pass");
+    hint.textContent = k === "plain" && field === "pass"
+      ? `Stored in the config file in the clear; prefer an environment variable or Store in AWS SSM.${stored ? " Leave empty to keep the current one." : ""}`
       : k === "ssm" ? "Stored as an encrypted SecureString when you save; the config keeps only its ARN."
       : k !== "unset" ? ""
       : fs.closest("#defaults-form") ? "Not set: falls back to the Defaults credential set, then keys or the SSH agent."
@@ -800,7 +844,7 @@ function renderCredentials() {
   for (const c of creds) {
     const tr = document.createElement("tr");
     const used = c.used_by.length ? c.used_by.join(", ") : "unused";
-    tr.append(cell(c.name), cell(secretText(c.user) || "-", "ref"), cell(secretText(c.pass) || "-", "ref"),
+    tr.append(cell(c.name), cell(secretText(c.user) || "-", "ref"), passCell(c.pass, cell(secretText(c.pass) || "-", "ref")),
       cell(c.identity_file || "-", c.identity_file ? "ref" : "muted"), cell(used, c.used_by.length ? "" : "muted"));
     const actions = document.createElement("td");
     actions.className = "actions";
@@ -1077,6 +1121,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#rotate-dialog").addEventListener("close", () => { $("#rotate-password").textContent = ""; $("#rotate-secret").hidden = true; });
   $("#rotate-copy").append(copyIcon());
   $("#rotate-copy").addEventListener("click", () => copyText($("#rotate-password").textContent, "the new password", false));
+  document.querySelectorAll(".table-wrap").forEach(trackCovered);
   $("#copy-location").append(copyIcon());
   $("#copy-location").addEventListener("click", () => copyText(state.cfg.location, "config location"));
   load();

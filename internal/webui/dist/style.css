@@ -74,6 +74,15 @@ tbody tr:hover td { background: var(--hover); }
 td.ref { font-family: var(--mono); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 td.num { font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; white-space: nowrap; }
+/* A wide table scrolls sideways; its row actions stay pinned in view. A
+   rule marks their edge only while columns sit underneath (the "covered"
+   class, kept by trackCovered). Not on phones, where the actions alone
+   would fill the table. */
+@media (min-width: 601px) {
+  td.actions, th.actions { position: sticky; right: 0; z-index: 1; }
+  td.actions { background: var(--panel); } /* the row hover tint still wins */
+  .table-wrap.covered td.actions, .table-wrap.covered th.actions { box-shadow: inset 1px 0 0 var(--line); }
+}
 td.actions > button + button { margin-left: 8px; }
 td.actions > button.placeholder { visibility: hidden; } /* keeps the column's slot; hidden from screen readers too */
 /* Reserve the status column up front, so a result does not resize the table. */
@@ -99,6 +108,10 @@ button.danger-fill { background: var(--danger); border-color: var(--danger); col
 .hint.note code, .hint.warn code { line-height: 1; } /* inline code would grow its line */
 .hint.note { background: var(--panel); border-color: var(--line); }
 .hint.warn { color: var(--warn-text); background: var(--warn-bg); }
+/* A literal password: stored in the config file in the clear. */
+.literal { display: inline-flex; gap: 4px; align-items: center; padding: 1px 6px; border-radius: 4px; color: var(--warn-text); background: var(--warn-bg); }
+.literal svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.secret-hint.warn { color: var(--warn-text); }
 .hint-icon { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
   stroke-linecap: round; stroke-linejoin: round; }
 th.status, td.status { width: 304px; min-width: 304px; max-width: 304px; overflow: hidden; } /* 280px badge + 2 × 12px padding */

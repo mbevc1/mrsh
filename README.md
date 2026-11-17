@@ -49,7 +49,7 @@ Subcommands have short aliases too: `init` `i`, `example` `ex`, `copy` `cp`, `li
 
 - `-g GROUP` selects a group; `-H NAME` (repeatable, comma-separated, alias `--hosts`) selects hosts by config name or address. Both together select the union.
 - A `-H` value that matches no config entry is treated as a literal address, `[user@]host[:port]`. `--debug` logs each such fall-through, which catches typos.
-- `--dry-run` prints the targets and the command without connecting. On commands that edit the config (`hosts add/update/remove/init/copy`, `credentials ...`), it prints the change as a diff of the file and writes nothing: no confirmation is asked, nothing is stored in or deleted from SSM (those steps are listed instead), and literal passwords show as `<password #N>`. `mrsh ui` has no dry run.
+- `--dry-run` prints the targets and the command without connecting. With `--rotate-pass` it lists the devices and the `/password` command, without reading any password or contacting a device. On commands that edit the config (`hosts add/update/remove/init/copy`, `credentials ...`), it prints the change as a diff of the file and writes nothing: no confirmation is asked, nothing is stored in or deleted from SSM (those steps are listed instead), and literal passwords show as `<password #N>`. `mrsh ui` has no dry run.
 
 ## Secrets
 
@@ -116,7 +116,7 @@ Secrets Manager passwords are refused. To move a password into SSM, run `--pass-
 
 ```bash
 mrsh creds set --name routers --rotate-pass             # wherever the set's password lives
-mrsh hosts update --name rb02 --rotate-pass --dry-run   # list the devices it would change
+mrsh hosts update --name rb02 --rotate-pass --dry-run   # list the devices and the command; reads no secrets
 ```
 
 The new password is printed once at the end when stdout is a terminal, and kept out of logs otherwise. It is always printed when the output is its only copy: for an environment variable, or when it could not be stored. It asks for confirmation unless `-y`, works on RouterOS devices only, and changes only the password (run other changes separately). A host that takes its password from a credential set is rotated through the set.

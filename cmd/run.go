@@ -136,8 +136,13 @@ func commandToRun(command, script string, configured []string) (string, []byte, 
 }
 
 func printDryRun(w io.Writer, targets []runner.Target, remote string, stdin []byte) error {
+	return printDryRunAs(w, "run", targets, remote, stdin)
+}
+
+// printDryRunAs is printDryRun with what would be done in place of "run".
+func printDryRunAs(w io.Writer, action string, targets []runner.Target, remote string, stdin []byte) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "dry-run: would run on %d host(s):\n", len(targets))
+	fmt.Fprintf(&b, "dry-run: would %s on %d host(s):\n", action, len(targets))
 	tw := tabwriter.NewWriter(&b, 0, 0, 3, ' ', 0)
 	for _, t := range targets {
 		kind := "config"

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -39,6 +40,9 @@ func newUICmd(opts *globalOptions) *cobra.Command {
 			"Stop it with Ctrl-C or the page's Exit button; nothing keeps running afterwards.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.dryRun {
+				return errors.New("--dry-run does not apply to mrsh ui: its edits are saved as you make them")
+			}
 			store, err := openStore(opts)
 			if err != nil {
 				return err

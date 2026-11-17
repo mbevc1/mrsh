@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 
@@ -24,7 +25,15 @@ func openStore(opts *globalOptions) (config.ConfigStore, error) {
 	if err := sse.Validate(); err != nil {
 		return nil, err
 	}
-	return config.NewStore(opts.config, config.StoreOptions{SSE: sse})
+	store, err := config.NewStore(opts.config, config.StoreOptions{SSE: sse})
+	if err != nil || !opts.dryRun {
+		return store, err
+	}
+	out := opts.stdout
+	if out == nil {
+		out = os.Stdout
+	}
+	return dryRunStore{ConfigStore: store, out: out}, nil
 }
 
 type loadedConfig struct {

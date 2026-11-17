@@ -17,6 +17,10 @@ import (
 // newSecretWriter builds the SSM writer; tests may replace it.
 var newSecretWriter = config.NewSecretWriter
 
+// dryRunSSMARN stands in for the region and account of a parameter that
+// --dry-run does not create.
+const dryRunSSMARN = "arn:aws:ssm:region:000000000000:parameter"
+
 // ssmDefault is the value --user-ssm/--pass-ssm take when given no name:
 // the parameter's default name, e.g. /mrsh/creds/routers/pass.
 const ssmDefault = "default"
@@ -56,6 +60,12 @@ func (f *secretFlags) store(cmd *cobra.Command, opts *globalOptions, cfg *config
 		}
 		if err := config.ValidSSMName(param); err != nil {
 			return fmt.Errorf("--%s: %w", x.flag, err)
+		}
+		if opts.dryRun {
+			// No prompt and no AWS call; the diff shows a placeholder ARN.
+			*x.arn = dryRunSSMARN + param
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dry-run: would ask for the %s and store it for %s in SSM as %s\n", x.field, label, param)
+			continue
 		}
 		var value string
 		var err error

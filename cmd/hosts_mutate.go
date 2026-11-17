@@ -343,7 +343,7 @@ func (f *hostFlags) updateMany(cmd *cobra.Command, opts *globalOptions) error {
 		if names, err = selectHosts(cfg, f.names, f.inGroups); err != nil {
 			return err
 		}
-		if !opts.yes && !asked {
+		if !opts.yes && !opts.dryRun && !asked {
 			asked = true
 			if err := confirmHosts(cmd, fmt.Sprintf("About to update %d host(s)", len(names)), cfg, names); err != nil {
 				return err
@@ -448,7 +448,7 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
 					}
 				}
-				if !opts.yes && !asked {
+				if !opts.yes && !opts.dryRun && !asked {
 					asked = true
 					if len(gone) == 1 && len(groups) == 0 {
 						h, _ := findHost(cfg, gone[0])
@@ -467,6 +467,9 @@ func newHostsRemoveCmd(opts *globalOptions) *cobra.Command {
 				}
 				return nil
 			})
+			if errors.Is(err, errDryRun) {
+				dryRunSecrets(cmd, cfgAfter, del, kept)
+			}
 			if err != nil {
 				return err
 			}

@@ -20,6 +20,7 @@ type pwRouter struct {
 	mu      sync.Mutex
 	pass    string
 	allowed int // password changes it accepts; -1 is unlimited
+	logins  int // password login attempts
 }
 
 var passwordArgs = regexp.MustCompile(`^/password old-password="([^"]*)" new-password="([^"]*)" confirm-new-password="([^"]*)"$`)
@@ -34,7 +35,14 @@ func startPwRouter(t *testing.T, pass string) *pwRouter {
 func (r *pwRouter) login(p string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.logins++
 	return p == r.pass
+}
+
+func (r *pwRouter) loginCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.logins
 }
 
 func (r *pwRouter) password() string {
@@ -165,7 +173,7 @@ func TestRotateKeepsTheStoreAndHostRules(t *testing.T) {
 		}
 	}
 	// Dry run touches nothing.
-	if out, _, err := execIn(t, "", "-q", "-f", cfg, "--dry-run", "creds", "set", "--name", "routers", "--rotate-pass"); err != nil || !strings.Contains(out, "kept in the config") || rt1.password() != "old" {
+	if out, _, err := execIn(t, "", "-q", "-f", cfg, "--dry-run", "creds", "set", "--name", "routers", "--rotate-pass"); err != nil || !strings.Contains(out, "(stored in the config)") || rt1.password() != "old" {
 		t.Fatalf("dry run: %v\n%s", err, out)
 	}
 
@@ -270,5 +278,28 @@ func TestRotateLiteralShowsPasswordWhenStuck(t *testing.T) {
 	}
 	if loadCfg(t, cfg).Credentials["routers"].Pass != "old" {
 		t.Error("the config changed after a failed rotation")
+	}
+}
+
+func TestRotateDryRunReadsNothing(t *testing.T) {
+	fake := ssmtest.Start(t)
+	arn := fake.ARN("/mrsh/creds/routers/pass") // never created: a real run would fail to read it
+	rt1 := startPwRouter(t, "old")
+	cfg := writeConfig(t, "defaults: {host_key_policy: insecure}\ncredentials:\n  routers: {user: admin, pass_arn: "+arn+"}\n  lab: {user: admin, pass_env: MRSH_TEST_UNSET_PASS}\nhosts:\n"+
+		hostLine("rt1", rt1, ", credential: routers")+hostLine("lab1", rt1, ", credential: lab")+hostLine("own", rt1, ", user: admin, pass: lit"))
+
+	cmdLine := "command:\n  /password old-password=\"<current>\" new-password=\"<new>\" confirm-new-password=\"<new>\"\n"
+	for args, head := range map[string]string{
+		"creds set --name routers --rotate-pass": "dry-run: would rotate the password of credential routers (stored in SSM parameter /mrsh/creds/routers/pass) on 1 host(s):\n",
+		"creds set --name lab --rotate-pass":     "dry-run: would rotate the password of credential lab (printed for you to set MRSH_TEST_UNSET_PASS) on 1 host(s):\n",
+		"hosts update --name own --rotate-pass":  "dry-run: would rotate the password of host own (stored in the config) on 1 host(s):\n",
+	} {
+		out, _, err := execIn(t, "", append([]string{"-q", "-f", cfg, "--dry-run"}, strings.Fields(args)...)...)
+		if err != nil || !strings.HasPrefix(out, head) || !strings.HasSuffix(out, cmdLine) || !strings.Contains(out, fmt.Sprintf("%s:%d", rt1.srv.Host, rt1.srv.Port)) {
+			t.Errorf("%s: %v\n%s", args, err, out)
+		}
+	}
+	if len(fake.Calls()) != 0 || rt1.password() != "old" || rt1.loginCount() != 0 {
+		t.Errorf("a dry run reached out: aws=%v logins=%d", fake.Calls(), rt1.loginCount())
 	}
 }

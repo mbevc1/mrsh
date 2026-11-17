@@ -382,19 +382,16 @@ func (r *rotation) rollback(e rotationEngine, targets []runner.Target, o rotatio
 // the per-device table and the outcome as the exit status.
 func (r *rotation) rotate(cmd *cobra.Command, opts *globalOptions, lc *loadedConfig) error {
 	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+	if opts.dryRun {
+		// Before resolving: a dry run reads no secrets and contacts nothing.
+		return r.printPlan(out, lc.cfg)
+	}
 	targets, err := resolveRotationTargets(ctx, lc.cfg, r)
 	if err != nil {
 		return err
 	}
 	runner.WarnIfInsecure(opts.hostKeyPolicy, opts.hostKeyPolicySet, len(targets))
-	out := cmd.OutOrStdout()
-	if opts.dryRun {
-		_, _ = fmt.Fprintf(out, "dry-run: would rotate the password of %s on %d device(s), kept in %s:\n", r.label, len(targets), r.where())
-		for _, t := range targets {
-			_, _ = fmt.Fprintf(out, "  %s (%s)\n", t.Name, t.Host.Host)
-		}
-		return nil
-	}
 	if !opts.yes {
 		if err := confirmTargets(cmd, "rotate the password of "+r.label+" on", targets); err != nil {
 			return err
@@ -428,6 +425,21 @@ func (r *rotation) rotate(cmd *cobra.Command, opts *globalOptions, lc *loadedCon
 		return errInterrupted
 	}
 	return &exitCodeError{code: exitHostFailed, msg: r.summary(o)}
+}
+
+// printPlan is --dry-run, in the shape of the other commands' dry runs:
+// what would be done, the devices, and the command with placeholders for
+// the passwords. It needs the config alone.
+func (r *rotation) printPlan(out io.Writer, cfg *config.Config) error {
+	targets, err := namedTargets(cfg, r.hosts)
+	if err != nil {
+		return err
+	}
+	kept := "stored in " + r.where()
+	if r.store == storeEnv {
+		kept = "printed for you to set " + r.dest
+	}
+	return printDryRunAs(out, fmt.Sprintf("rotate the password of %s (%s)", r.label, kept), targets, mt.PasswordCmd("<current>", "<new>"), nil)
 }
 
 // isTerminal reports whether w is an interactive terminal.

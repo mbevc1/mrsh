@@ -203,7 +203,7 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 						also = fmt.Sprintf(" and delete %d SSM parameter(s)", len(del))
 					}
 				}
-				if !opts.yes && !asked {
+				if !opts.yes && !opts.dryRun && !asked {
 					asked = true
 					if err := confirm(cmd, fmt.Sprintf("Remove credential %s from %s%s? [y/N]: ", name, store.Location(), also)); err != nil {
 						return err
@@ -211,6 +211,9 @@ func newCredentialsRemoveCmd(opts *globalOptions) *cobra.Command {
 				}
 				return d.RemoveCredential(name)
 			})
+			if errors.Is(err, errDryRun) {
+				dryRunSecrets(cmd, cfgAfter, del, kept)
+			}
 			if err != nil {
 				return err
 			}

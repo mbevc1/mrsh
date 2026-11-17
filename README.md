@@ -49,7 +49,7 @@ Subcommands have short aliases too: `init` `i`, `example` `ex`, `copy` `cp`, `li
 
 - `-g GROUP` selects a group; `-H NAME` (repeatable, comma-separated, alias `--hosts`) selects hosts by config name or address. Both together select the union.
 - A `-H` value that matches no config entry is treated as a literal address, `[user@]host[:port]`. `--debug` logs each such fall-through, which catches typos.
-- `--dry-run` prints the targets and the command without connecting.
+- `--dry-run` prints the targets and the command without connecting. On commands that edit the config (`hosts add/update/remove/init/copy`, `credentials ...`), it prints the change as a diff of the file and writes nothing: no confirmation is asked, nothing is stored in or deleted from SSM (those steps are listed instead), and literal passwords show as `<password #N>`. `mrsh ui` has no dry run.
 
 ## Secrets
 

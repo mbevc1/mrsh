@@ -30,6 +30,7 @@ type globalOptions struct {
 	timeout      int
 	output       string
 	dryRun       bool
+	stdout       io.Writer // where a --dry-run config change is shown
 	debug        bool
 	quiet        bool
 	yes          bool
@@ -102,6 +103,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			opts.stdout = cmd.OutOrStdout()
 			setupLogging(cmd.ErrOrStderr(), opts.debug || envDebug(), opts.quiet)
 			return validateOutput(opts.output)
 		},
@@ -121,7 +123,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	pf.IntVarP(&opts.parallel, "parallel", "p", 1, "number of parallel SSH sessions")
 	pf.IntVarP(&opts.timeout, "timeout", "t", 30, "SSH timeout in seconds")
 	pf.StringVarP(&opts.output, "output", "o", "text", "output format: "+strings.Join(validOutputs, "|"))
-	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run without executing")
+	pf.BoolVar(&opts.dryRun, "dry-run", false, "print what would run or change, without connecting or writing")
 	pf.BoolVarP(&opts.yes, "assume-yes", "y", false, "answer yes to confirmation prompts (alias --yes)")
 	pf.BoolVarP(&opts.debug, "debug", "d", false, "verbose logging to stderr")
 	pf.BoolVarP(&opts.quiet, "quiet", "q", false, "suppress warnings (errors still print to stderr)")
@@ -150,6 +152,7 @@ func newRootCmdWithOptions() (*cobra.Command, *globalOptions) {
 	} {
 		_ = root.RegisterFlagCompletionFunc(flag, fn)
 	}
+	dryRunOK(root)
 	return root, opts
 }
 
